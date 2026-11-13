@@ -33,8 +33,6 @@ use crate::host::{AsyncUtility, Process, Utility, run_async_utility, run_process
 macro_rules! for_each_extra {
 	($callback:ident) => {
 		$callback! {
-			async_utility [feature = "util.ast-grep"] "ast-grep" ast_grep::AstGrep;
-			async_utility [feature = "util.ast-grep"] "sg" ast_grep::AstGrep;
 			utility [feature = "util.awk"] "awk" awk::Awk;
 			utility [feature = "util.b2sum"] "b2sum" b2sum::B2sum;
 			utility [feature = "util.base32"] "base32" base32::Base32;

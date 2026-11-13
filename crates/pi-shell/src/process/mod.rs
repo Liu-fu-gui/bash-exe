@@ -71,6 +71,10 @@ pub struct ProcessOptions {
 	/// Nothing outlives the call: a second [`main`] in the same process
 	/// starts from the same state.
 	pub embedded: bool,
+	/// pi's utilities stand in for the commands `PATH` lacks, on Windows, as
+	/// in `omp zsh` there, standalone as well (bash-exe's scripts and
+	/// interactive shells).
+	pub extras:   bool,
 }
 
 /// What to run, and as whom.
@@ -532,7 +536,7 @@ fn run(args: &ShellArgs, env: Vec<(BString, BString)>, input: Input, opts: Proce
 	let mut host = NativeHost::new(None, false, inherited, ignored_on_entry(), 0, opts.embedded);
 	// `omp zsh` on Windows: pi's utilities stand in for the Unix tools it
 	// lacks. Elsewhere, and in obash, a missing command stays not found.
-	if opts.embedded && cfg!(windows) {
+	if (opts.embedded || opts.extras) && cfg!(windows) {
 		host.offer_extras(&env);
 	}
 	let cfg = EngineConfig::default();

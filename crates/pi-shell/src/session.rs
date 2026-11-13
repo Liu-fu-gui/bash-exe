@@ -51,8 +51,8 @@
 //! nothing could reach them afterwards. A job that is just an external runs
 //! on as its own process, as in bash.
 //!
-//! **Tools.** `timeout`, `nohup` and (with `PI_SMART_GIT`/`PI_GIT_GUARD`)
-//! `git` are host callouts: the driver hands them to its
+//! **Tools.** `timeout`, `nohup` and the extras that run command lines are
+//! host callouts: the driver hands them to its
 //! [`ToolCalls`](crate::tools::ToolCalls), routes the `Done` of their
 //! subshells there, polls them every turn, and parks no longer than their
 //! next deadline.
@@ -106,11 +106,10 @@ pub struct SessionConfig {
 	/// The filesystem: `crate::vfs::VfsFs`, or `crate::sys::StdFs`.
 	pub fs:              Box<dyn Fs + Send>,
 	/// The pi-vfs filesystem slot behind [`SessionConfig::fs`] (a clone of
-	/// the same [`VfsFs`]), when there is one: pi's utilities and in-process
-	/// `git worktree add` ([`crate::tools`]) work on the filesystem it holds
-	/// when they run, and externals get the host files its URLs alias
-	/// ([`PiHost::spawn`](crate::bash::Host::spawn)). `None`: every path is
-	/// native.
+	/// the same [`VfsFs`]), when there is one: pi's utilities ([`crate::tools`])
+	/// work on the filesystem it holds when they run, and externals get the host
+	/// files its URLs alias ([`PiHost::spawn`](crate::bash::Host::spawn)).
+	/// `None`: every path is native.
 	pub vfs:             Option<VfsFs>,
 	/// Runtime the host's timers (`read -t`, `TMOUT`) sleep on.
 	pub runtime:         tokio::runtime::Handle,

@@ -511,7 +511,7 @@ mod tests {
 	#[test]
 	fn native_refs_name_their_extra() {
 		let gate = ExtrasGate::default();
-		for name in ["cat", "sort", "ps", "sleep", "sg", "ast-grep"] {
+		for name in ["cat", "sort", "ps", "sleep", "rg", "jq"] {
 			if let Some(cmd) = gate.native(name.into()) {
 				assert_eq!(native_name(cmd), Some(name));
 			}

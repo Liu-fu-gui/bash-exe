@@ -13,8 +13,6 @@ async fn assert_callouts(rows: &[(&str, i32, &str)]) {
 	let session_env = HashMap::from([
 		("PI_DISABLE_NOHUP_BUILTIN".into(), "0".into()),
 		("PI_DISABLE_UUTILS_BUILTINS".into(), "0".into()),
-		("PI_SMART_GIT".into(), "1".into()),
-		("PI_GIT_GUARD".into(), "0".into()),
 	]);
 	let mut mismatches = Vec::new();
 	for &(command, status, marker) in rows {

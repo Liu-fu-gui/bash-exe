@@ -427,6 +427,110 @@ pub async fn execute_shell_streams(
 	run_shell_oneshot_streams(config, run_config, streams, cancel_token).await
 }
 
+/// One-shot execution over the caller's own descriptors, as a process
+/// shell's `bash -c` runs: `stdio` (stdin, stdout, stderr; the null device for
+/// one not given) are the command's fds 0, 1 and 2. No pipes and no readers:
+/// output reaches them as it is written, bytes and order as they are.
+pub async fn execute_shell_stdio(
+	options: ShellExecuteOptions,
+	stdio: [Option<fs::File>; 3],
+	cancel_token: CancelToken,
+) -> Result<ShellExecuteResult> {
+	let config = ShellConfig {
+		session_env:   options.session_env,
+		snapshot_path: options.snapshot_path,
+		minimizer:     None,
+		filesystem:    options.filesystem,
+		seed:          None,
+	};
+	let run_config = ShellRunConfig {
+		command:    options.command,
+		cwd:        options.cwd,
+		env:        options.env,
+		minimizer:  None,
+		filesystem: None,
+		pipe_taps:  None,
+		trace:      None,
+	};
+	let tokio_cancel = CancellationToken::new();
+	let mut task = tokio::spawn({
+		let tokio_cancel = tokio_cancel.clone();
+		async move {
+			let mut session = create_session_for_run(&config, Some(&tokio_cancel)).await?;
+			install_run_filesystem(&session, &run_config, &tokio_cancel);
+			let result = run_shell_command_stdio(&mut session, &run_config, stdio, tokio_cancel).await;
+			restore_session_filesystem(&session);
+			result
+		}
+	});
+	let run_result = tokio::select! {
+		result = &mut task => result,
+		reason = cancel_token.wait() => {
+			tokio_cancel.cancel();
+			let graceful = time::timeout(CANCEL_RUN_GRACE, &mut task).await;
+			if graceful.is_err() {
+				task.abort();
+				let _ = task.await;
+			}
+			return Ok(cancelled_result(reason));
+		},
+	};
+	let res = run_result
+		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
+	Ok(res?.into_run_result())
+}
+
+async fn run_shell_command_stdio(
+	session: &mut ShellSessionCore,
+	options: &ShellRunConfig,
+	[stdin, stdout, stderr]: [Option<fs::File>; 3],
+	cancel_token: CancellationToken,
+) -> Result<CommandResult> {
+	let cwd = requested_cwd(session, options.cwd.as_deref()).await?;
+	let scope = CommandScope {
+		options,
+		env: command_env(options.env.as_ref()),
+		cancel: cancel_token.clone(),
+	};
+	let stderr = match stderr {
+		Some(file) => file,
+		None => null_file()?,
+	};
+	let mut diagnostics = stderr
+		.try_clone()
+		.map_err(|err| Error::msg(format!("Failed to clone stderr: {err}")))?;
+	let stdio = RunStdio {
+		stdin:  Some(match stdin {
+			Some(file) => file,
+			None => null_file()?,
+		}),
+		stdout: Some(match stdout {
+			Some(file) => file,
+			None => null_file()?,
+		}),
+		stderr: Some(stderr),
+	};
+	let mut command = options.command.clone();
+	ensure_trailing_newline_for_heredoc(&mut command);
+	let run = scope.run_options(command, cwd, None);
+	let mut result = session
+		.session
+		.run_with(run, stdio, cancel_token.clone())
+		.await;
+	if let Ok(outcome) = &result {
+		session.cwd.clone_from(&outcome.cwd);
+	}
+	if let Err(err) = drain_dropped_files(&session.slot, &cancel_token).await {
+		report_close_failure(&mut diagnostics, &err, &mut result);
+	}
+	let outcome = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
+	Ok(CommandResult {
+		status:      outcome.status,
+		minimized:   None,
+		working_dir: session.cwd.to_str_lossy().into_owned(),
+	})
+}
+
 /// How long a cancelled run waits for its task to wind down before aborting
 /// it (discarding any output still queued in the pipe readers, and stopping
 /// the command with `KILL`).

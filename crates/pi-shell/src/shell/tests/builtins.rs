@@ -317,7 +317,6 @@ async fn every_utility_builtin_is_registered_under_its_own_name() {
 	// contain: a loop over the registry cannot notice a name missing from it.
 	// Adding a utility is expected to update this list.
 	let expected = [
-		"ast-grep",
 		"awk",
 		"b2sum",
 		"base32",
@@ -373,7 +372,6 @@ async fn every_utility_builtin_is_registered_under_its_own_name() {
 		"sd",
 		"sed",
 		"seq",
-		"sg",
 		"sha1sum",
 		"sha224sum",
 		"sha256sum",
@@ -430,13 +428,11 @@ async fn every_utility_builtin_is_registered_under_its_own_name() {
 		assert!(err.is_empty(), "{name} --help wrote to stderr: {err:?}");
 		// Some builtins are registered under the familiar command name but
 		// keep their implementation's own help text, exactly as the
-		// standalone versions did: `rg` is ripgrep, `sg` is ast-grep
-		// (whose help names itself only through its usage line, here
-		// `sg`), and `jq` prints jq 1.8.2's help.
+		// standalone versions did: `rg` is ripgrep and `jq` prints jq
+		// 1.8.2's help.
 		let expected = match name {
 			"rg" => "ripgrep",
 			"jq" => "jq - commandline JSON processor [version 1.8.2]",
-			"sg" => "using AST pattern",
 			other => other,
 		};
 		assert!(

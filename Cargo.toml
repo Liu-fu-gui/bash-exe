@@ -1,44 +1,29 @@
 [workspace]
-# Explicit, not `crates/pi-*`: a glob member that resolves to a directory
-# without a Cargo.toml (a deleted crate whose dir survives `git reset --hard`
-# because an ignored file stayed behind) is a hard error that fails the whole
-# workspace, not a skipped entry.
 members = [
-   "crates/pi-ast",
+   "bash-exe",
    "crates/pi-builtins",
    "crates/pi-diff",
-   "crates/pi-edit",
    "crates/pi-iso",
-   "crates/pi-natives",
-   "crates/pi-predict",
    "crates/pi-shell",
-   "crates/pi-vcs",
    "crates/pi-vfs",
-   "crates/pi-voice",
    "crates/pi-walker",
-   "crates/vendor/cfg_aliases",
    "crates/vendor/grep-searcher",
    "crates/vendor/jaq-core",
    "crates/vendor/jaq-json",
    "crates/vendor/jaq-std",
-   "crates/vendor/napi",
-   "crates/vendor/tree-sitter-go",
 ]
 resolver = "3"
 
 [workspace.package]
-version = "18.20.0"
+version = "0.1.0"
 edition = "2024"
-rust-version = "1.101"
-license = "MIT"
-authors = ["Stencil Labs, Inc."]
-homepage = "https://omp.sh/"
-repository = "https://github.com/can1357/oh-my-pi"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+authors = ["BaoCode", "Stencil Labs, Inc."]
+homepage = "https://baocode.dev/"
+repository = "https://github.com/baocode-dev/bash-exe"
 
 [patch.crates-io]
-# portable-pty 0.9.0 pins nix 0.28, whose cfg_aliases 0.1.1 expansion emits
-# future-incompatible trailing semicolons.
-cfg_aliases = { path = "crates/vendor/cfg_aliases" }
 # grep-searcher 0.1.17 (latest release) searches either a blocking `io::Read`
 # or a whole slice; the vendored copy adds the chunk-fed `search_push` (see its
 # README.md).
@@ -49,30 +34,14 @@ grep-searcher = { path = "crates/vendor/grep-searcher" }
 jaq-core = { path = "crates/vendor/jaq-core" }
 jaq-json = { path = "crates/vendor/jaq-json" }
 jaq-std = { path = "crates/vendor/jaq-std" }
-# napi 3.13.0 pins every `bun test --isolate` realm through per-thread handles
-# of never-torn-down envs; the vendored copy releases them (see its README.md).
-napi = { path = "crates/vendor/napi" }
-# tree-sitter-go 0.25.0 (latest release) rejects Go 1.26 `new(expr)`; the
-# vendored copy carries the upstream grammar fix (see its README.md).
-tree-sitter-go = { path = "crates/vendor/tree-sitter-go" }
 
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
-# Unwind (not abort) so panics inside vendored code and native tasks stay
-# recoverable at the appropriate boundary: the uutils boundary
-# (pi-shell coreutils) turns a panic into a failed command, and the
-# `task::blocking` wrapper in `crates/pi-natives/src/task.rs` catches unwinds
-# inside `Blocking::compute` before they cross napi-rs's async-work
-# `extern "C"` callback (napi `src/async_work.rs:109`) so they surface as
-# rejected JS Promises instead of forced process aborts under Rust's C-unwind
-# rules (RFC 2945, stable since 1.81). napi-rs does NOT install its own
-# per-call `catch_unwind` on the `Task`/`AsyncTask` path; the tokio-future
-# path (`env.spawn_future`) is guarded upstream. Recoverable uutils panics
-# are kept out of the crash report by the crash hook
-# (see crates/pi-natives/src/crash_handler.rs).
+# Unwind (not abort): the uutils boundary (pi-shell coreutils) turns a panic
+# in a utility into that command failing, not the shell aborting.
 panic = "unwind"
 
 # Share host and target dependency units in release builds.
@@ -254,23 +223,15 @@ too_many_arguments = "allow" # Argument count is rarely the real complexity sign
 too_many_lines = "allow"     # Arbitrary limits don't account for necessary complexity
 
 [workspace.dependencies]
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Internal Libraries
-# ──────────────────────────────────────────────────────────────────────────────
-pi-ast = { path = "crates/pi-ast", default-features = false }
+# Ours.
+pi-builtins = { path = "crates/pi-builtins" }
 pi-diff = { path = "crates/pi-diff" }
-pi-edit = { path = "crates/pi-edit" }
 pi-iso = { path = "crates/pi-iso" }
 pi-shell = { path = "crates/pi-shell" }
-pi-predict = { path = "crates/pi-predict" }
-pi-voice = { path = "crates/pi-voice" }
-pi-walker = { path = "crates/pi-walker" }
-pi-vcs = { path = "crates/pi-vcs" }
 pi-vfs = { path = "crates/pi-vfs" }
-pi-builtins = { path = "crates/pi-builtins" }
-# Third-party crates of pi-shell's bash engine (`crates/pi-shell/src/bash`),
-# at the versions of the workspace it came from.
+pi-walker = { path = "crates/pi-walker" }
+
+# The bash engine's (`crates/pi-shell/src/bash`).
 blake3 = { version = "1.8.7", features = ["rayon"] }
 bstr = { version = "1.13.1", features = ["serde"] }
 encoding_rs = "0.8.42"
@@ -281,69 +242,40 @@ postcard = { version = "1.1.3", default-features = false, features = ["use-std"]
 strum = { version = "0.28.0", features = ["derive"] }
 tempfile = "3.27.0"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Async Runtime & Concurrency
-# ──────────────────────────────────────────────────────────────────────────────
+# Async.
 async-trait = "0.1"
+flume = "0.12"
 futures = "0.3"
 parking_lot = "0.12.5"
-rayon = "1.12"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
-flume = "0.12"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Serialization & Data Formats
-# ──────────────────────────────────────────────────────────────────────────────
-base64 = "0.23"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order"] }
-toml = "1.1"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Error Handling
-# ──────────────────────────────────────────────────────────────────────────────
+# Data, errors, text.
 anyhow = "1.0"
-thiserror = "2"
+base64 = "0.23"
 bytes = "1"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI & Configuration
-# ──────────────────────────────────────────────────────────────────────────────
 clap = { version = "4", features = ["derive", "env"] }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Text Processing & Parsing
-# ──────────────────────────────────────────────────────────────────────────────
-pdf-inspector = "1"
+fancy-regex = "0.17"
 regex = "1"
-fontdue = { version = "0.9", default-features = false }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Data Structures - Collections
-# ──────────────────────────────────────────────────────────────────────────────
-phf = { version = "0.14", features = ["macros"] }
-smallvec = { version = "1.16.1", features = [
-   "serde",
-   "write",
-   "union",
-   "const_new",
-] }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Hashing
-# ──────────────────────────────────────────────────────────────────────────────
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+smallvec = { version = "1.16.1", features = ["serde", "write", "union", "const_new"] }
+thiserror = "2"
+toml = "1.1"
+xutf = "1.5"
 xxhash-rust = { version = "0.8", features = ["xxh64", "xxh32"] }
+zstd = "0.14"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Audio & Realtime Media
-# ──────────────────────────────────────────────────────────────────────────────
-opus = "0.4.0"
-webrtc = "0.17.2"
+# Search and file walking (`rg`, `grep`, `find`, `fd`).
+globset = "0.4"
+grep-matcher = "0.1"
+grep-pcre2 = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+pcre2-sys = "0.2.10"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# System & Platform
-# ──────────────────────────────────────────────────────────────────────────────
+# The system.
 libc = "0.2.191"
 windows-sys = { version = "0.61", features = [
    "Win32_Foundation",
@@ -363,151 +295,4 @@ windows-sys = { version = "0.61", features = [
    "Win32_System_SystemInformation",
    "Win32_System_Threading",
 ] }
-# Transitive-only pin (wired through crates/pi-natives' `cfg(false)` target
-# deps so the constraint participates in resolution without tripping the
-# unused-dependency lint): cc 1.2.x passes
-# FILE_ATTRIBUTE_TEMPORARY to OpenOptionsExt::custom_flags as u32, but
-# find-msvc-tools 0.1.13 retyped that constant to i32, breaking every Windows
-# build. tree-sitter-sequel caps cc at ~1.2.1 so the fixed cc 1.4.x line is
-# out of reach; hold 0.1.12 until upstream ships a compatible release.
-find-msvc-tools = "=0.1.12"
 winreg = "0.56"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Node.js Bindings (NAPI)
-# ──────────────────────────────────────────────────────────────────────────────
-napi = { version = "3", features = ["napi10", "tokio_rt", "tokio_time"] }
-napi-build = "2"
-napi-derive = "3"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Terminal & PTY
-# ──────────────────────────────────────────────────────────────────────────────
-arboard = { version = "3.6.1", features = ["wayland-data-control"] }
-clipboard-win = "5.4"
-portable-pty = "0.9"
-shlex = "2"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Search & File Walking
-# ──────────────────────────────────────────────────────────────────────────────
-globset = "0.4"
-grep-matcher = "0.1"
-grep-pcre2 = "0.1"
-pcre2-sys = "0.2.10"
-grep-regex = "0.1"
-grep-searcher = "0.1"
-ignore = "0.4"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Image Processing & Syntax Highlighting
-# ──────────────────────────────────────────────────────────────────────────────
-image = { version = "0.25", default-features = false, features = [
-   "png",
-   "jpeg",
-   "gif",
-   "webp",
-] }
-resvg = "0.48"
-# Not used directly: activates zune-jpeg's non-default `log` feature so image's
-# JPEG decoder compiles — zune-jpeg 0.5.15's no-log stub macros are not
-# expression-safe and the crate fails to build without it.
-zune-jpeg = { version = "0.5", default-features = false, features = ["log"] }
-# Not used directly: pins tinyvec to fixed 1.13.3 because 1.13.0 was published broken
-# (cannot find macro `vec` in alloc-only context).
-tinyvec = "=1.13.3"
-png = "0.18"
-# Oniguruma, not fancy-regex: onig is already linked (pi-builtins), and its
-# compiled grammar regexes are ~5x smaller and faster (TS+TSX warm: 29 vs 149 MB
-# RSS; a 16.8k-line .d.ts highlights in 226 vs 1166 ms). When upgrading, re-sync
-# crates/pi-natives/src/syntaxes/Markdown.sublime-syntax and preserve its fixes.
-syntect = { version = "5.3", default-features = false, features = [
-   "default-syntaxes",
-   "default-themes",
-   "regex-onig",
-   "yaml-load",
-] }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Markup Conversion
-# ──────────────────────────────────────────────────────────────────────────────
-# The version html-to-markdown-rs builds on; bump with it.
-html-escape = "0.3"
-html-to-markdown-rs = { version = "3.18.3", default-features = false }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Tokenization
-# ──────────────────────────────────────────────────────────────────────────────
-xutf = "1.5"
-zstd = "0.14"
-fancy-regex = "0.17"
-tiktoken-rs = "0.12"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Version Control (in-process git + jujutsu)
-# ──────────────────────────────────────────────────────────────────────────────
-# gix is pinned to the minor jj-lib depends on so both VCS backends share one
-# gitoxide stack in the binary. No transport/credential features: network ops
-# (clone/fetch/push) deliberately shell out to the git CLI for auth parity.
-gix = { version = "0.85", default-features = false, features = [
-   "attributes",
-   "blob-diff",
-   "dirwalk",
-   "excludes",
-   "index",
-   "max-performance-safe",
-   "merge",
-   "revision",
-   "sha1",
-   "sha256",
-   "status",
-   "tree-editor",
-   "worktree-mutation",
-   "zlib-rs",
-] }
-jj-lib = { version = "0.44", default-features = false, features = ["git"] }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# AST & Tree-Sitter
-# ──────────────────────────────────────────────────────────────────────────────
-ast-grep-core = { version = "0.39", default-features = false, features = [
-   "tree-sitter",
-] }
-tree-sitter = "0.25"
-tree-sitter-bash = "0.25"
-tree-sitter-c = "0.24"
-tree-sitter-cpp = "0.23"
-tree-sitter-css = "0.25"
-tree-sitter-diff = "0.1"
-# elisp, fortran, lua, ruby, swift: test-only stand-ins for wasm grammars (see
-# the pi-ast and pi-edit dev-dependencies); every other grammar here is linked in.
-tree-sitter-elisp = "1.7.2"
-tree-sitter-fortran = "0.6.0"
-tree-sitter-go = "0.25"
-tree-sitter-html = "0.23"
-tree-sitter-java = "0.23"
-tree-sitter-javascript = "0.25"
-tree-sitter-json = "0.24"
-tree-sitter-lua = "0.5"
-tree-sitter-md = "0.5"
-tree-sitter-python = "0.25"
-tree-sitter-regex = "0.25"
-tree-sitter-ruby = "0.23"
-tree-sitter-rust = "0.24"
-tree-sitter-swift = "0.7"
-tree-sitter-toml-ng = "0.7"
-tree-sitter-typescript = "0.23"
-tree-sitter-yaml = "0.7"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Machine Learning (pi-predict SmolLM2 engine)
-# ──────────────────────────────────────────────────────────────────────────────
-# macOS-only (Metal decoder; other targets use pi-predict's own CPU decoder).
-# 0.9.x, not 0.10+: later candle-core releases depend unconditionally on
-# `tokenizers` with the `onig` C library.
-candle-core = "0.9.2"
-candle-nn = "0.9.2"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Unsorted (added by `cargo add` - move into a section above)
-# ──────────────────────────────────────────────────────────────────────────────

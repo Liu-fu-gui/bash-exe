@@ -70,6 +70,6 @@ pub use pi_builtins::{
 };
 pub use shell::{
 	MinimizerResult, Shell, ShellExecuteOptions, ShellExecuteResult, ShellOptions, ShellRunOptions,
-	ShellRunResult, StreamSinks, execute_shell, execute_shell_streams,
+	ShellRunResult, StreamSinks, execute_shell, execute_shell_stdio, execute_shell_streams,
 };
 pub use taps::{PipeStreamInfo, PipeStreamRead, PipeTaps};

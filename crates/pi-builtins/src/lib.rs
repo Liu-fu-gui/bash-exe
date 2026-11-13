@@ -54,8 +54,6 @@ mod progress;
 // Ports of the standalone command-line utilities the shell ships in-process.
 // Each runs against the explicit `host::Host` view of the shell; see
 // `src/host.rs` for the contract.
-#[cfg(feature = "util.ast-grep")]
-mod ast_grep;
 #[cfg(feature = "util.awk")]
 mod awk;
 #[cfg(feature = "util.b2sum")]

@@ -76,7 +76,6 @@ num-traits = "0.2"
 onig = { version = "6.4", default-features = false }
 os_display = "0.1.4"
 parse_datetime = "0.16"
-pi-ast = { workspace = true, optional = true }
 pi-diff.workspace = true
 pi-walker.workspace = true
 pi-vfs.workspace = true
@@ -192,7 +191,6 @@ default = ["utils"]
 # ── Utility builtins ──────────────────────────────────────────────────────────
 # One feature per ported utility so a single utility can be built (and checked)
 # in isolation. `utils` turns on the whole set and is part of `default`.
-"util.ast-grep" = ["dep:pi-ast"]
 "util.awk" = []
 "util.b2sum" = ["util.cksum"]
 "util.base32" = []
@@ -290,7 +288,6 @@ default = ["utils"]
 "util.yes" = []
 
 utils = [
-  "util.ast-grep",
   "util.awk",
   "util.b2sum",
   "util.base32",

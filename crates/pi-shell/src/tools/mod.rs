@@ -9,9 +9,6 @@
 //! - `nohup`: runs its command in a detached tree ([`Lineage::detached`]): the
 //!   shell's cancel spares it and the spawner leaves its externals running when
 //!   the shell is torn down.
-//! - `git` (with `PI_SMART_GIT` or `PI_GIT_GUARD`): the [`crate::git`] layers
-//!   on a worker thread, then the git binary found on `PATH`, by absolute path
-//!   so it never resolves back to the tool.
 //! - pi's extras that run command lines (`env`, `ifne`, `xargs`, `find`): the
 //!   utility runs on the session's runtime, and each command it runs is a
 //!   subshell of the caller ([`crate::extras`] for the other extras).
@@ -29,7 +26,6 @@
 //! [`crate::host::check_signal_target`].
 
 mod extra;
-mod git;
 mod nohup;
 mod timeout;
 
@@ -44,13 +40,12 @@ use crate::{
 		ShellApi, ToolCall, ToolRef,
 	},
 	extras::{ExtrasGate, ReportedError},
-	git::{GitLayers, flag_on},
+	git::flag_on,
 	vfs::VfsFs,
 };
 
 const TIMEOUT: ToolRef = ToolRef(1);
 const NOHUP: ToolRef = ToolRef(2);
-const GIT: ToolRef = ToolRef(3);
 /// Every extra that runs command lines; `argv[0]` names it.
 const EXTRA: ToolRef = ToolRef(4);
 
@@ -61,8 +56,8 @@ const NOHUP_OFF: &str = "PI_DISABLE_NOHUP_BUILTIN";
 ///
 /// `timeout`, `nohup` and the extras [`ExtrasGate`] offers, in a shell whose
 /// starting environment turns on the switches `on` names ([`flag_on`] of
-/// their values). Not `git`, whose layers wrap the binary. omp's bash tool
-/// lists them to the model.
+/// their values). omp's bash tool lists them to the
+/// model.
 pub fn builtins(on: impl Fn(&str) -> bool) -> Vec<&'static str> {
 	let extras = ExtrasGate::from_switches(&on);
 	let mut names: Vec<&'static str> = pi_builtins::extras::extras()
@@ -82,13 +77,8 @@ pub struct ToolConfig {
 	/// `nohup` is the tool (off with `PI_DISABLE_NOHUP_BUILTIN`: the system
 	/// binary runs).
 	pub nohup:          bool,
-	/// The `git` layers on at the start; `git` is the binary when none is.
-	/// Each call reads the layers again from its own environment, so a
-	/// command can turn one off (`PI_GIT_GUARD=0 git …`).
-	pub git:            GitLayers,
 	/// The session's filesystem slot ([`VfsFs::filesystem`], read per call):
-	/// what pi's extras run on, and whose native paths in-process `git
-	/// worktree add` may touch. `None` when every path is native (`StdFs`).
+	/// what pi's extras run on. `None` when every path is native (`StdFs`).
 	pub vfs:            Option<VfsFs>,
 	/// pi's extras the shell offers (`PI_DISABLE_UUTILS_*`).
 	pub extras:         ExtrasGate,
@@ -115,7 +105,6 @@ impl ToolConfig {
 		let on = |name: &str| flag_on(var(name));
 		Self {
 			nohup: !on(NOHUP_OFF),
-			git: GitLayers::from_env(var),
 			vfs,
 			extras: ExtrasGate::from_switches(on),
 			runtime: Some(runtime),
@@ -128,7 +117,6 @@ impl ToolConfig {
 		match name.as_bytes() {
 			b"timeout" => Some(TIMEOUT),
 			b"nohup" if self.nohup => Some(NOHUP),
-			b"git" if self.git.any() => Some(GIT),
 			_ if self.extras.runs_commands(name) => Some(EXTRA),
 			_ => None,
 		}
@@ -146,14 +134,6 @@ impl ToolConfig {
 			.vfs
 			.as_ref()
 			.map_or_else(pi_vfs::Fs::native, VfsFs::filesystem)
-	}
-
-	/// Whether `path` is a plain host filesystem object.
-	fn native(&self, path: &std::path::Path) -> bool {
-		self
-			.vfs
-			.as_ref()
-			.is_none_or(|fs| fs.filesystem().is_native_local(path))
 	}
 }
 
@@ -281,7 +261,6 @@ struct Turn<'a> {
 enum Tool {
 	Timeout(timeout::Timeout),
 	Nohup(nohup::Nohup),
-	Git(git::Git),
 	Extra(extra::Extra),
 }
 
@@ -290,7 +269,6 @@ impl Tool {
 		Some(match call.tool {
 			TIMEOUT => Self::Timeout(timeout::Timeout::new(call)),
 			NOHUP => Self::Nohup(nohup::Nohup::new(call)),
-			GIT => Self::Git(git::Git::new(call)),
 			EXTRA => Self::Extra(extra::Extra::new(call)),
 			_ => return None,
 		})
@@ -301,7 +279,6 @@ impl Tool {
 		match self {
 			Self::Timeout(t) => t.advance(api, turn),
 			Self::Nohup(t) => t.advance(api, turn),
-			Self::Git(t) => t.advance(api, turn),
 			Self::Extra(t) => t.advance(api, turn),
 		}
 	}
@@ -312,7 +289,6 @@ impl Tool {
 		let child = match self {
 			Self::Timeout(t) => &mut t.child,
 			Self::Nohup(t) => &mut t.child,
-			Self::Git(t) => &mut t.child,
 			Self::Extra(t) => return t.on_done(run, status, signal),
 		};
 		child.on_done(run, status)
@@ -322,7 +298,6 @@ impl Tool {
 		match self {
 			Self::Timeout(t) => &t.child,
 			Self::Nohup(t) => &t.child,
-			Self::Git(t) => &t.child,
 			Self::Extra(t) => &t.child,
 		}
 	}
@@ -339,7 +314,7 @@ impl Tool {
 	fn deadline(&self) -> Option<u64> {
 		match self {
 			Self::Timeout(t) => t.deadline(),
-			Self::Nohup(_) | Self::Git(_) | Self::Extra(_) => None,
+			Self::Nohup(_) | Self::Extra(_) => None,
 		}
 	}
 }
@@ -579,15 +554,11 @@ mod tests {
 		let plain = config(&[]);
 		assert_eq!(plain.lookup("timeout".into()), Some(TIMEOUT));
 		assert_eq!(plain.lookup("nohup".into()), Some(NOHUP));
-		assert_eq!(plain.lookup("git".into()), None);
 		assert_eq!(plain.lookup("xargs".into()), Some(EXTRA));
 		assert_eq!(plain.lookup("sort".into()), None);
 		assert!(plain.native_extra("sort".into()).is_some());
-		let layered = config(&[("PI_GIT_GUARD", "1"), ("PI_DISABLE_NOHUP_BUILTIN", "true")]);
-		assert_eq!(layered.lookup("git".into()), Some(GIT));
-		assert_eq!(layered.lookup("nohup".into()), None);
-		let off = config(&[("PI_SMART_GIT", "false"), ("PI_GIT_GUARD", "0")]);
-		assert_eq!(off.lookup("git".into()), None);
+		let no_nohup = config(&[("PI_DISABLE_NOHUP_BUILTIN", "true")]);
+		assert_eq!(no_nohup.lookup("nohup".into()), None);
 		let no_utils = config(&[("PI_DISABLE_UUTILS_BUILTINS", "1")]);
 		assert_eq!(no_utils.lookup("xargs".into()), None);
 		assert!(no_utils.native_extra("sort".into()).is_none());
