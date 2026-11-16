@@ -145,7 +145,7 @@ pub fn array(
 				})
 				.collect();
 			if has_main(store, vp)? {
-				files.push(k.argv0.clone());
+				files.push(shell_name(k, store, vp)?);
 			}
 			files
 		},
@@ -259,9 +259,20 @@ pub fn definition_file(
 		return Ok(file.clone());
 	}
 	if has_main(store, vp)? {
-		return Ok(k.argv0.clone());
+		return shell_name(k, store, vp);
 	}
 	state::dollar0(store, vp, &k.argv0)
+}
+
+/// The name `vp`'s shell was started with: a nested shell's own (the
+/// script `bash s.sh` runs), else the engine's. `BASH_SOURCE`'s outermost
+/// entry: `[[ ${BASH_SOURCE[0]} == "$0" ]]` held in no script that a shell
+/// run as `bash -c` started.
+fn shell_name(k: &Kernel, store: &mut dyn StateStore, vp: &Vproc) -> Result<BString, StoreError> {
+	Ok(match state::record(store, vp, Key::Misc(MiscKey::Argv0))? {
+		Some(Record::Misc(name)) => name.clone(),
+		_ => k.argv0.clone(),
+	})
 }
 
 /// bash's `get_bashargcv`: reading `BASH_ARGC`/`BASH_ARGV` outside any

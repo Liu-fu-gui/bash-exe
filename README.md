@@ -39,8 +39,15 @@ working around that.
   whatever the system's code page (no GBK on a Chinese Windows), and Python
   runs with `PYTHONUTF8=1`.
 - **No surprises from Windows' own shims**: `bash x.sh` and `sh -c …` run
-  this bash, not WSL's; `$SHELL` is this bash; where `python3` is only the
-  Microsoft Store's placeholder, it runs the Python that is installed.
+  this bash, not WSL's; `$SHELL` and `$BASH` are this bash; where `python3` is
+  only the Microsoft Store's placeholder, it runs the Python that is
+  installed.
+- **What scripts written for Git Bash expect**: `uname -s` is
+  `MINGW64_NT-…` and `$OSTYPE` `msys`; `diff <(a) <(b)`, `/dev/stdin`,
+  `/dev/stderr`, `/dev/zero` and `/dev/urandom` work; a `#!/usr/bin/env node`
+  script runs with node; `env` and `xargs` find `node.exe` and `npm.cmd`;
+  `sed` edits files that are not UTF-8 (GBK) without touching their other
+  bytes; `chmod` sets and clears the read-only attribute.
 
 ## Use
 
@@ -51,9 +58,10 @@ bash script.sh arg
 bash                    # interactive
 ```
 
-`bash -c COMMAND [NAME [ARGS…]]` (with any of `-e`, `-u`, `-x`, `-l`,
-`--login`, `--norc`, `--noprofile`) runs COMMAND with the tools above. Any
-other command line runs the engine as a process shell.
+`bash -c COMMAND [NAME [ARGS…]]` and `bash script.sh [ARGS…]` (with bash's
+options) run with the tools above. Commands on stdin and the interactive shell
+run the engine as a process shell, where a program on `PATH` comes before a
+built-in tool.
 
 ## Build
 

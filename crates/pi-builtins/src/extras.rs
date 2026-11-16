@@ -40,6 +40,7 @@ macro_rules! for_each_extra {
 			utility [feature = "util.basename"] "basename" basename::Basename;
 			utility [feature = "util.cat"] "cat" cat::Cat;
 			utility [all(feature = "util.chmod", unix)] "chmod" chmod::Chmod;
+			utility [all(feature = "util.chmod", windows)] "chmod" chmod_windows::Chmod;
 			utility [feature = "util.cksum"] "cksum" cksum::Cksum;
 			utility [feature = "util.cmp"] "cmp" cmp::Cmp;
 			utility [feature = "util.comm"] "comm" comm::Comm;

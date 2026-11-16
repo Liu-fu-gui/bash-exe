@@ -407,6 +407,10 @@ fn get_input_type(fs: &BlockingFs, path: &OsString, resolved: &Path) -> CatResul
 		file_type if file_type.is_socket() => Ok(InputType::Socket),
 		file_type if file_type.is_dir() => Ok(InputType::Directory),
 		file_type if file_type.is_file() => Ok(InputType::File),
+		// Windows': the shell's pipes and devices (`<(…)`, `/dev/stdin`,
+		// `/dev/zero`), read as files are.
+		#[cfg(not(unix))]
+		file_type if file_type.is_fifo() || file_type.is_char_device() => Ok(InputType::File),
 		file_type if file_type.is_symlink() => Ok(InputType::SymLink),
 		_ => Err(CatError::UnknownFiletype { ft_debug: format!("{file_type:?}") }),
 	}

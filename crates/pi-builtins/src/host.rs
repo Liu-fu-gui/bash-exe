@@ -56,7 +56,7 @@ use parking_lot::Mutex;
 use pi_vfs::{BlockingFs, Metadata, absolute_path};
 use tokio_util::sync::CancellationToken;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::openfile::DescriptorPath;
 use crate::{
 	openfile::{self, Fd, OpenFile},
@@ -518,7 +518,33 @@ impl ShellPaths {
 		};
 		#[cfg(unix)]
 		let descriptors: Arc<[(i32, OpenFile)]> = descriptors.into_iter().collect();
-		#[cfg(not(unix))]
+		// Windows has no `/dev/fd`: every descriptor is mounted at its virtual
+		// path, a native handle as a duplicate of it, for `diff <(a) <(b)`,
+		// `cat /dev/stdin` and `tee /dev/stderr` to open.
+		#[cfg(windows)]
+		let filesystem = descriptors.into_iter().fold(filesystem, |filesystem, (fd, file)| {
+			let mounted = match &file {
+				OpenFile::File(file) if is_disk_file(file) => {
+					file.try_clone().ok().map(pi_vfs::File::from)
+				},
+				OpenFile::File(file) => {
+					Some(pi_vfs::File::from_handle(NativeStream { file: Arc::clone(file) }))
+				},
+				OpenFile::Vfs(file) => file.try_clone().ok(),
+				OpenFile::Stream(_) => None,
+			};
+			match mounted {
+				Some(mounted) => filesystem.mount_file(virtual_descriptor_path(fd), mounted),
+				None => filesystem,
+			}
+		});
+		#[cfg(windows)]
+		let filesystem = [(DEV_ZERO, false), (DEV_RANDOM, true)]
+			.into_iter()
+			.fold(filesystem, |filesystem, (path, random)| {
+				filesystem.mount_file(path, pi_vfs::File::from_handle(Device { random }))
+			});
+		#[cfg(not(any(unix, windows)))]
 		drop(descriptors);
 		#[cfg(unix)]
 		let filesystem = descriptors.iter().fold(filesystem, |filesystem, (fd, file)| {
@@ -559,6 +585,16 @@ impl ShellPaths {
 	/// A descriptor path becomes `/dev/fd/<host fd>` for the shell's
 	/// descriptor, or a path that cannot be opened when the shell has none.
 	pub fn resolve(&self, path: impl AsRef<Path>) -> PathBuf {
+		#[cfg(windows)]
+		if let Some(DescriptorPath::Fd(fd)) = DescriptorPath::parse(path.as_ref()) {
+			return virtual_descriptor_path(fd);
+		}
+		#[cfg(windows)]
+		match path.as_ref().to_str() {
+			Some("/dev/zero") => return PathBuf::from(DEV_ZERO),
+			Some("/dev/random" | "/dev/urandom") => return PathBuf::from(DEV_RANDOM),
+			_ => {},
+		}
 		let resolved = self.absolute(path.as_ref());
 		#[cfg(unix)]
 		if let Some(descriptor) = DescriptorPath::parse(&resolved) {
@@ -630,8 +666,105 @@ impl ShellPaths {
 	}
 }
 
+/// Where `/dev/zero` and `/dev/urandom` (and `/dev/random`) are mounted on
+/// Windows, which has neither.
+#[cfg(windows)]
+const DEV_ZERO: &str = "omp-device://zero";
+#[cfg(windows)]
+const DEV_RANDOM: &str = "omp-device://urandom";
+
+/// Whether `file` is a file on disk: Windows reports a pipe or console
+/// handle as a regular file too.
+#[cfg(windows)]
+fn is_disk_file(file: &std::fs::File) -> bool {
+	use std::os::windows::io::AsRawHandle as _;
+
+	use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
+	// SAFETY: `file` keeps its handle open for the call.
+	unsafe { GetFileType(file.as_raw_handle()) == FILE_TYPE_DISK }
+}
+
+/// A pipe or console handle of the shell's, mounted for a descriptor path
+/// as the stream it is (a file it would be truncated as: `tee /dev/stderr`
+/// was refused).
+#[cfg(windows)]
+#[derive(Debug)]
+struct NativeStream {
+	file: Arc<std::fs::File>,
+}
+
+#[cfg(windows)]
+#[async_trait::async_trait]
+impl pi_vfs::FileHandle for NativeStream {
+	async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+		match (&*self.file).read(buf) {
+			// A pipe whose writer is gone is the end of its input.
+			Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(0),
+			read => read,
+		}
+	}
+
+	async fn write(&self, buf: &[u8]) -> io::Result<usize> {
+		(&*self.file).write(buf)
+	}
+
+	async fn seek(&self, _pos: io::SeekFrom) -> io::Result<u64> {
+		Err(io::ErrorKind::NotSeekable.into())
+	}
+
+	async fn metadata(&self) -> io::Result<Metadata> {
+		Ok(Metadata::new(
+			pi_vfs::FileType::from_kind(pi_vfs::FileKind::Fifo),
+			0,
+			pi_vfs::Permissions::from_mode(0o600),
+		))
+	}
+
+	async fn flush(&self) -> io::Result<()> {
+		(&*self.file).flush()
+	}
+}
+
+/// `/dev/zero` or `/dev/urandom` on Windows: endless zeros or random bytes;
+/// writes are taken and dropped.
+#[cfg(windows)]
+#[derive(Debug)]
+struct Device {
+	random: bool,
+}
+
+#[cfg(windows)]
+#[async_trait::async_trait]
+impl pi_vfs::FileHandle for Device {
+	async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+		if self.random {
+			use rand::TryRng as _;
+			rand::rngs::SysRng.try_fill_bytes(buf).map_err(io::Error::other)?;
+		} else {
+			buf.fill(0);
+		}
+		Ok(buf.len())
+	}
+
+	async fn write(&self, buf: &[u8]) -> io::Result<usize> {
+		Ok(buf.len())
+	}
+
+	async fn seek(&self, _pos: io::SeekFrom) -> io::Result<u64> {
+		Ok(0)
+	}
+
+	async fn metadata(&self) -> io::Result<Metadata> {
+		Ok(Metadata::new(
+			pi_vfs::FileType::from_kind(pi_vfs::FileKind::CharDevice),
+			0,
+			pi_vfs::Permissions::from_mode(0o666),
+		))
+	}
+}
+
 /// Virtual descriptors cannot share native `/dev/fd` numbers in the overlay.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn virtual_descriptor_path(fd: i32) -> PathBuf {
 	PathBuf::from(format!("omp-descriptor://{fd}"))
 }

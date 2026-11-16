@@ -58,6 +58,19 @@ fn takes_its_name_and_arguments() {
 	assert_eq!(out, "own pid\n");
 }
 
+/// A script's name is the outermost `BASH_SOURCE` of the shell running it,
+/// as it is its `$0`, not the name of the shell that started that one
+/// (`[[ ${BASH_SOURCE[0]} == "$0" ]]` failed in every nested script).
+#[test]
+fn a_script_is_its_own_bash_source() {
+	let (out, err, _) = run(
+		"printf '%s\\n' 'echo \"$0|${BASH_SOURCE[0]}\"' 'f() { echo \"${BASH_SOURCE[0]}\"; }; f' > \
+		 s.sh; bash s.sh; bash -c 'echo \"[${BASH_SOURCE[0]}]\"'",
+	);
+	assert_eq!(err, "");
+	assert_eq!(out, "s.sh|s.sh\ns.sh\n[]\n");
+}
+
 /// The nested shell's exit status (after its EXIT trap) is the command's.
 #[test]
 fn exit_status_and_exit_trap() {

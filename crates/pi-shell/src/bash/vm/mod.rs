@@ -1436,6 +1436,21 @@ pub fn zsh_startup_values(
 	out
 }
 
+/// `$BASH`, the shell's file: `argv0`, except where `bash.exe` runs the
+/// engine on Windows, whose path it is (`C:/…/bash.exe`), not a bare `bash`
+/// that `PATH` finds as WSL's.
+fn bash_path(argv0: &[u8], platform: crate::bash::ids::Platform) -> BString {
+	if platform == crate::bash::ids::Platform::Windows
+		&& let Ok(exe) = std::env::current_exe()
+		&& exe
+			.file_stem()
+			.is_some_and(|stem| stem.eq_ignore_ascii_case("bash"))
+	{
+		return BString::from(exe.to_string_lossy().replace('\\', "/"));
+	}
+	BString::from(argv0)
+}
+
 /// Startup-only defaults shared by root and nested bash/sh shells.
 pub struct StartupVars {
 	lookup_shell: bool,
@@ -1467,13 +1482,22 @@ pub fn startup_values(
 		(b"OPTIND", BString::from("1")),
 		(b"OPTERR", BString::from("1")),
 		(b"BASH_VERSION", BString::from(BASH_VERSION)),
-		(b"BASH", BString::from(argv0)),
+		(b"BASH", bash_path(argv0, platform)),
 		(b"HOSTNAME", cx.host.hostname()),
 		(b"PPID", BString::from(ppid.to_string())),
 		(b"UID", BString::from(user.uid.to_string())),
 		(b"EUID", BString::from(user.euid.to_string())),
 		(b"HOSTTYPE", BString::from(std::env::consts::ARCH)),
-		(b"OSTYPE", BString::from(std::env::consts::OS)),
+		// Git Bash's (MSYS2's), which scripts test for Windows
+		// (`[[ $OSTYPE == msys* ]]`).
+		(
+			b"OSTYPE",
+			BString::from(if platform == crate::bash::ids::Platform::Windows {
+				"msys"
+			} else {
+				std::env::consts::OS
+			}),
+		),
 		(b"HOME", user.home),
 		(b"SHELL", shell),
 		(b"TERM", BString::from("dumb")),

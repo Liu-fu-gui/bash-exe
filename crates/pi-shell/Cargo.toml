@@ -58,6 +58,8 @@ xxhash-rust.workspace = true
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+# `/dev/urandom`, which Windows lacks.
+getrandom = "0.4"
 windows-sys.workspace = true
 winreg.workspace = true
 

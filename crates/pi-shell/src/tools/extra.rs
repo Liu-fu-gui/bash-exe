@@ -30,7 +30,7 @@ use std::{
 	ffi::OsStr,
 	future::Future,
 	io,
-	path::{Path, PathBuf},
+	path::PathBuf,
 	pin::Pin,
 	sync::Arc,
 	task::{Context, Poll, Waker},
@@ -124,9 +124,12 @@ impl Extra {
 			);
 			invocation.cancel = Some(cancel.clone());
 			let lookup = Lookup {
-				path:   invocation.env.get("PATH").cloned(),
-				cwd:    invocation.cwd.clone(),
-				config: turn.config.clone(),
+				path:    invocation.env.get("PATH").cloned(),
+				pathext: crate::sys::pathext::Pathext::parse(
+					invocation.env.get("PATHEXT").map(OsStr::new),
+				),
+				cwd:     invocation.cwd.clone(),
+				config:  turn.config.clone(),
 			};
 			invocation.commands =
 				Some(Box::new(Runner { requests, waker: turn.waker.clone(), lookup }));
@@ -264,6 +267,11 @@ fn script(mut command: ShellCommand, program: &Program, env_names: &[BString]) -
 			quote(&mut source, &argv0);
 			source.extend_from_slice(b" -- \"$@\"");
 			args[0] = os_bytes(path.as_os_str());
+			// `exec` takes a name without `/` for one to search `PATH` for:
+			// `C:\…\node.exe` has to be `C:/…/node.exe`.
+			if cfg!(windows) {
+				args[0] = args[0].replace(b"\\", b"/").into();
+			}
 		},
 	}
 	let mut script = Script::command(source);
@@ -358,10 +366,12 @@ fn cancelled() -> io::Error {
 /// What a command name runs, as of the utility's start.
 struct Lookup {
 	/// The utility's `PATH`.
-	path:   Option<String>,
+	path:    Option<String>,
+	/// The utility's `PATHEXT` (Windows): `node` runs `node.exe`.
+	pathext: crate::sys::pathext::Pathext,
 	/// The utility's working directory.
-	cwd:    PathBuf,
-	config: ToolConfig,
+	cwd:     PathBuf,
+	config:  ToolConfig,
 }
 
 impl Lookup {
@@ -377,10 +387,10 @@ impl Lookup {
 			.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
 		let cwd = command.dir().unwrap_or(&self.cwd);
 		if has_separator(name) {
-			return match executable(&cwd.join(name)) {
-				Some(true) => Ok(Program::Path(cwd.join(name))),
-				Some(false) => Err(io::ErrorKind::PermissionDenied.into()),
-				None => Err(io::ErrorKind::NotFound.into()),
+			return match runnable(cwd.join(name), &self.pathext) {
+				Ok(path) => Ok(Program::Path(path)),
+				Err(true) => Err(io::ErrorKind::PermissionDenied.into()),
+				Err(false) => Err(io::ErrorKind::NotFound.into()),
 			};
 		}
 		if self.builtin(name) {
@@ -398,11 +408,10 @@ impl Lookup {
 			.unwrap_or(DEFAULT_PATH);
 		let mut denied = false;
 		for dir in std::env::split_paths(OsStr::new(path)) {
-			let candidate = cwd.join(dir).join(name);
-			match executable(&candidate) {
-				Some(true) => return Ok(Program::Path(candidate)),
-				Some(false) => denied = true,
-				None => {},
+			match runnable(cwd.join(dir).join(name), &self.pathext) {
+				Ok(path) => return Ok(Program::Path(path)),
+				Err(true) => denied = true,
+				Err(false) => {},
 			}
 		}
 		let kind = if denied {
@@ -428,20 +437,30 @@ fn has_separator(name: &OsStr) -> bool {
 	bytes.contains(&b'/') || (cfg!(windows) && bytes.contains(&b'\\'))
 }
 
-/// `Some(true)` for an executable file at `path`, `Some(false)` for a file
-/// that is not executable, `None` for nothing (or a directory).
+/// The file `path` names to run; `Err(true)` for a file that is not
+/// executable, `Err(false)` for nothing (or a directory).
 #[cfg(unix)]
-fn executable(path: &Path) -> Option<bool> {
+fn runnable(path: PathBuf, _pathext: &crate::sys::pathext::Pathext) -> Result<PathBuf, bool> {
 	use std::os::unix::fs::PermissionsExt as _;
-	let meta = std::fs::metadata(path)
+	let meta = std::fs::metadata(&path)
 		.ok()
-		.filter(std::fs::Metadata::is_file)?;
-	Some(meta.permissions().mode() & 0o111 != 0)
+		.filter(std::fs::Metadata::is_file)
+		.ok_or(false)?;
+	if meta.permissions().mode() & 0o111 == 0 {
+		return Err(true);
+	}
+	Ok(path)
 }
 
+/// On Windows the file itself (a script the shell runs by its `#!` line),
+/// else its first `PATHEXT` spelling: `node` is `node.exe`, `npm` `npm.cmd`
+/// where no `npm` script sits beside it.
 #[cfg(not(unix))]
-fn executable(path: &Path) -> Option<bool> {
-	(path.is_file() || path.with_extension("exe").is_file()).then_some(true)
+fn runnable(path: PathBuf, pathext: &crate::sys::pathext::Pathext) -> Result<PathBuf, bool> {
+	if path.is_file() {
+		return Ok(path);
+	}
+	pathext.resolve(path).ok_or(false)
 }
 
 #[cfg(test)]
