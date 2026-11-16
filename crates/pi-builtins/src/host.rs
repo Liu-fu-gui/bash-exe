@@ -1760,6 +1760,30 @@ fn native_working_dir<'a>(filesystem: &BlockingFs, cwd: &'a Path) -> io::Result<
 	}
 }
 
+/// `CREATE_NO_WINDOW` when this process has no console, else 0: the
+/// creation flags of a program it starts on its console.
+///
+/// A console program started from a process without a console gets a new
+/// console, which shows a window (on Windows 11 maybe a terminal's) unless
+/// told not to. One with a console shares it (a terminal's, or the hidden
+/// console of a host started with `CREATE_NO_WINDOW`), as Ctrl-C from the
+/// terminal and full-screen programs need.
+#[cfg(windows)]
+pub fn console_creation_flags() -> u32 {
+	use windows_sys::Win32::System::{Console::GetConsoleCP, Threading::CREATE_NO_WINDOW};
+	static FLAGS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+	// SAFETY: no preconditions; 0 without a console.
+	*FLAGS.get_or_init(|| if unsafe { GetConsoleCP() } == 0 { CREATE_NO_WINDOW } else { 0 })
+}
+
+/// [`console_creation_flags`] set on `command`; nothing off Windows.
+pub fn no_console_window(command: &mut std::process::Command) {
+	#[cfg(windows)]
+	std::os::windows::process::CommandExt::creation_flags(command, console_creation_flags());
+	#[cfg(not(windows))]
+	let _ = command;
+}
+
 impl ChildEnv {
 	/// Builds a `Command` for `program` with the shell's working directory and
 	/// environment, stderr piped, and (unix) in a new session with no
@@ -1777,6 +1801,7 @@ impl ChildEnv {
 			.stderr(std::process::Stdio::piped());
 		#[cfg(unix)]
 		std::os::unix::process::CommandExt::setsid(&mut command, true);
+		no_console_window(&mut command);
 		Ok(command)
 	}
 

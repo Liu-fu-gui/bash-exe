@@ -8008,6 +8008,7 @@ fn shell_command(cmd: &str, host: &Host) -> io::Result<ProcessCommand> {
 	c.arg("/C").arg(cmd);
 	c.current_dir(host.native_cwd()?);
 	c.env_clear().envs(host.env());
+	crate::host::no_console_window(&mut c);
 	Ok(c)
 }
 

@@ -6,7 +6,6 @@ use std::{
 	env,
 	os::windows::ffi::{OsStrExt, OsStringExt},
 	path::{Path, PathBuf},
-	process::Command,
 };
 
 use windows_sys::Win32::Storage::FileSystem::{GetLongPathNameW, GetShortPathNameW};
@@ -184,20 +183,16 @@ fn query_git_install_path_from_registry() -> Option<String> {
 	None
 }
 
+/// The install root of the `git.exe` `PATH` finds, as `where git` would
+/// say, without running `where` (a console program: a window flashes up when
+/// this process has none, and it costs a process start every time).
 fn query_git_install_path_from_where() -> Option<String> {
-	let output = Command::new("where").arg("git").output().ok()?;
-	if !output.status.success() {
-		return None;
-	}
-
-	let stdout = String::from_utf8_lossy(&output.stdout);
-	let line = stdout.lines().next()?.trim();
-	if line.is_empty() {
-		return None;
-	}
-
-	let git_path = Path::new(line);
-	let install_root = git_install_root_from_path(git_path)?;
+	let path = env::var_os("PATH")?;
+	let git_path = env::split_paths(&path)
+		.filter(|dir| !dir.as_os_str().is_empty())
+		.map(|dir| dir.join("git.exe"))
+		.find(|git| git.is_file())?;
+	let install_root = git_install_root_from_path(&git_path)?;
 	Some(install_root.to_string_lossy().into_owned())
 }
 
