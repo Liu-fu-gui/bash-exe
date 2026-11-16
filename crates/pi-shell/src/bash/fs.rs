@@ -45,13 +45,23 @@ pub fn url_root_len(path: &[u8]) -> Option<usize> {
 	path[colon..].starts_with(b"://").then_some(colon + 3)
 }
 
-/// An MSYS drive alias (`/c/x`, `/mnt/c/x`) in the engine's Windows spelling
-/// `C:/x`; `None` for any other path.
+/// An MSYS path alias in the engine's Windows spelling: a drive alias
+/// (`/c/x`, `/mnt/c/x`) as `C:/x`, and the `/tmp` tree in the temporary
+/// directory, where the utilities put it too; `None` for any other path.
 ///
 /// The engine applies it on Windows wherever it makes a name absolute, so
 /// command names, redirections, `test` and `cd` reach the drive the alias
-/// names ([`pi_vfs::msys_drive`] parses it).
+/// names ([`pi_vfs::msys_drive`] parses it) and `echo x > /tmp/f` writes
+/// the file `cat /tmp/f` reads.
 pub fn msys_drive_path(path: &[u8]) -> Option<BString> {
+	if let Some(rest) = path.strip_prefix(b"/tmp")
+		&& (rest.is_empty() || rest.starts_with(b"/"))
+	{
+		let temp = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+		let mut out = BString::from(temp.trim_end_matches('/'));
+		out.extend_from_slice(rest);
+		return Some(out);
+	}
 	let (letter, tail) = pi_vfs::msys_drive(path)?;
 	let mut out = BString::from(vec![letter, b':', b'/']);
 	out.extend_from_slice(tail);

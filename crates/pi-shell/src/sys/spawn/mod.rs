@@ -48,6 +48,8 @@ use std::{
 use bstr::BString;
 use parking_lot::Mutex;
 #[cfg(windows)]
+pub use windows::{SET_CONSOLE_CODE_PAGE, set_console_code_page_if_asked, use_console_code_page};
+#[cfg(windows)]
 pub(crate) use windows::{break_console_groups, has_console_groups};
 
 #[cfg(unix)]

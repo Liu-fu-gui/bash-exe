@@ -33,6 +33,8 @@ mod fs_ops;
 mod job;
 pub mod langinfo;
 mod lifecycle;
+#[cfg_attr(not(windows), allow(dead_code, reason = "used by Windows spawning"))]
+mod msys_args;
 mod park;
 pub mod pathext;
 pub mod pcre;
@@ -55,6 +57,10 @@ pub mod utmp;
 
 #[cfg(windows)]
 pub(crate) use crate::sys::spawn::break_console_groups;
+#[cfg(windows)]
+pub use crate::sys::spawn::{
+	SET_CONSOLE_CODE_PAGE, set_console_code_page_if_asked, use_console_code_page,
+};
 pub use crate::sys::{
 	fs::{StdFile, StdFs, std_stream},
 	park::Parker,

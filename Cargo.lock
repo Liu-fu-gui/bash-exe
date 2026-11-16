@@ -158,11 +158,12 @@ dependencies = [
 
 [[package]]
 name = "bash-exe"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bstr",
  "pi-shell",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2001,7 +2002,7 @@ dependencies = [
 
 [[package]]
 name = "pi-builtins"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ansi-width",
  "anyhow",
@@ -2086,11 +2087,11 @@ dependencies = [
 
 [[package]]
 name = "pi-diff"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "pi-iso"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -2102,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2139,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "pi-vfs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -2152,7 +2153,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "flume",
