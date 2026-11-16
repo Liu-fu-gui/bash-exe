@@ -193,12 +193,21 @@ pub fn cd(ctx: &mut Ctx<'_, '_>, args: &[BString]) -> R {
 }
 
 /// `pwd [-LP]`: the working directory, physical (symlinks resolved) with
-/// `-P` or `set -P`.
+/// `-P` or `set -P`; on Windows `-W` too.
 pub fn pwd(ctx: &mut Ctx<'_, '_>, args: &[BString]) -> R {
-	let o = match opts(ctx, args, b"LP", b"", false) {
+	// Git Bash's `-W`: the Windows spelling (`C:/x`, not `/c/x`).
+	let windows = ctx.k.engine.config().platform == crate::bash::ids::Platform::Windows;
+	let flags: &[u8] = if windows { b"LPW" } else { b"LP" };
+	let o = match opts(ctx, args, flags, b"", false) {
 		Ok(o) => o,
 		Err(st) => return done(st),
 	};
+	if o.has(b'W') {
+		let mut line = windows_spelling(&ctx.vp.cwd);
+		line.push(b'\n');
+		ctx.out(&line);
+		return done(0);
+	}
 	let mut line = if !physical(ctx, &o)? {
 		ctx.vp.cwd.to_vec()
 	} else if let ProbeResult::Path(Some(real)) =
@@ -217,6 +226,27 @@ pub fn pwd(ctx: &mut Ctx<'_, '_>, args: &[BString]) -> R {
 	line.push(b'\n');
 	ctx.out(&line);
 	done(0)
+}
+
+/// The Windows spelling of the directory `dir`, `/` separated: `/c/x` and
+/// `/mnt/c/x` are `C:/x`, `/tmp` the temporary directory.
+fn windows_spelling(dir: &[u8]) -> Vec<u8> {
+	let dir = dir.replace(b"\\", b"/");
+	if let Some((letter, tail)) = pi_vfs::msys_drive(&dir) {
+		let mut out = vec![letter, b':', b'/'];
+		out.extend_from_slice(tail);
+		return out;
+	}
+	#[cfg(windows)]
+	if let Some(rest) = dir.strip_prefix(b"/tmp")
+		&& (rest.is_empty() || rest.starts_with(b"/"))
+	{
+		let temp = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+		let mut out = temp.trim_end_matches('/').as_bytes().to_vec();
+		out.extend_from_slice(rest);
+		return out;
+	}
+	dir
 }
 
 /// `umask [-p] [-S] [mode]` (octal modes).

@@ -255,6 +255,7 @@ default = ["utils"]
 "util.readlink" = []
 "util.realpath" = []
 # Shares the record layout and line-length bound with `grep`.
+"util.rev" = []
 "util.rg" = ["util.grep"]
 "util.rm" = []
 "util.rmdir" = []
@@ -347,6 +348,7 @@ utils = [
   "util.printenv",
   "util.readlink",
   "util.realpath",
+  "util.rev",
   "util.rg",
   "util.rm",
   "util.rmdir",

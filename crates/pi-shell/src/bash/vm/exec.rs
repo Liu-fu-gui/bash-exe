@@ -1107,6 +1107,7 @@ fn next_command(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>) -> Option<WaitK
 			..
 		});
 		let eval = matches!(frame.kind, FrameKind::Script { what: ScriptKind::Eval, .. });
+		let run = matches!(frame.kind, FrameKind::Script { what: ScriptKind::Run, .. });
 		// zsh `execode` of empty code (`zstyle -e`, `zregexparse`) leaves 0.
 		let code = matches!(frame.kind, FrameKind::Script { what: ScriptKind::Code(_), .. });
 		// A zsh function trap (`TRAPZERR`, …) runs above a trap frame
@@ -1117,6 +1118,8 @@ fn next_command(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>) -> Option<WaitK
 		// The text of a zsh command substitution (`child_text`) ends its
 		// child: the child's own EXIT trap runs.
 		let sub_end = eval && top == 0 && vp.parent.is_some() && mode.dialect() == Dialect::Zsh;
+		// So does the input of a nested shell (`bash -c`, `bash script`).
+		let nested_end = run && top == 0 && vp.parent.is_some() && vp.transient;
 		if source && return_trap(k, vp, cx, top) {
 			return None;
 		}
@@ -1127,7 +1130,7 @@ fn next_command(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>) -> Option<WaitK
 		if (source || eval || code) && no_command {
 			vp.status = 0;
 		}
-		if sub_end {
+		if sub_end || nested_end {
 			start_exit_trap_once(k, vp, cx);
 			return None;
 		}

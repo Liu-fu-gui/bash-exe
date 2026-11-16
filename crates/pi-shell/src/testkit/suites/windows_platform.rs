@@ -130,3 +130,33 @@ fn async_commands_list_traps_set_between_them_on_windows() {
 		"trap -- '' SIGINT\ntrap -- '' SIGINT\ntrap -- 'echo t' SIGTERM\ndone\n"
 	);
 }
+
+/// Windows has no `/bin` or `/usr/bin`: those paths name the command
+/// (`/usr/bin/env`, `/bin/bash`); a nested shell keeps the path as `$0`.
+#[test]
+fn unix_bin_paths_name_the_command_on_windows() {
+	let src =
+		"/bin/bash -c 'echo $0 ok'; /usr/bin/echo hi; /usr/local/bin/sh -c 'echo $0'; /bin/x/echo no";
+	assert_eq!(
+		run_on(ModeId::Bash, Platform::Windows, src),
+		"/bin/bash ok\nhi\n/usr/local/bin/sh\n"
+	);
+}
+
+/// Git Bash's `pwd -W`: the directory as Windows spells it.
+#[test]
+fn pwd_w_prints_the_windows_spelling() {
+	for (cwd, want) in [(r"C:\Users\b\src", "C:/Users/b/src\n"), ("/d/work", "D:/work\n")] {
+		let init = ShellInit {
+			mode: ModeId::Bash,
+			argv0: "bash".into(),
+			cwd: BString::from(cwd),
+			..ShellInit::default()
+		};
+		let cfg = EngineConfig { platform: Platform::Windows, ..EngineConfig::default() };
+		let mut rig = Rig::with_config(FakeHost::new(), init, cfg);
+		rig.run(Script::command(b"pwd -W".to_vec()), Fault::None);
+		assert_eq!(String::from_utf8_lossy(&rig.host.stdout.bytes()), want);
+	}
+	assert_eq!(run_on(ModeId::Bash, Platform::Linux, "pwd -W || echo no"), "no\n");
+}

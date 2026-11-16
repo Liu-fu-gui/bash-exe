@@ -1794,6 +1794,14 @@ fn assign_now(
 	builtins::set_value(k, cx, vp, Lhs { name, index, append }, value, Level::Dynamic)
 }
 
+/// The command name in `/bin/NAME`, `/usr/bin/NAME` or `/usr/local/bin/NAME`.
+fn unix_bin_name(path: &[u8]) -> Option<&[u8]> {
+	let base = [b"/bin/".as_slice(), b"/usr/bin/", b"/usr/local/bin/"]
+		.into_iter()
+		.find_map(|dir| path.strip_prefix(dir))?;
+	(!base.is_empty() && !base.contains(&b'/') && !base.contains(&b'\\')).then_some(base)
+}
+
 /// The host's resolution of `name` with this shell's builtin table applied:
 /// a builtin `enable -n` disabled is not found, a loaded one (`enable -f`)
 /// is a builtin.
@@ -1887,6 +1895,19 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 					break Target::Function(name.clone());
 				}
 			}
+			// Windows has no `/bin` or `/usr/bin`: `/usr/bin/env` and
+			// `/bin/bash` are the commands `env` and `bash`, as in Git Bash
+			// (`$0` keeps the path).
+			let unix_bin = (has_slash
+				&& k.engine.config().platform == crate::bash::ids::Platform::Windows)
+				.then(|| unix_bin_name(name))
+				.flatten()
+				.map(BString::from);
+			let (has_slash, spelled) = match unix_bin {
+				Some(base) => (false, Some(std::mem::replace(&mut st(vp).argv[0], base))),
+				None => (has_slash, None),
+			};
+			let name = &current_argv(vp)[0];
 			let rctx = ResolveCtx { has_slash, via };
 			let resolved = match resolve(k, cx, vp, name, mode, rctx) {
 				Ok(resolved) => resolved,
@@ -1896,6 +1917,11 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 				},
 			};
 			let ExecState { argv, arrayref, .. } = st(vp);
+			if let Some(spelled) = spelled
+				&& resolved == Resolved::SelfShell
+			{
+				argv[0] = spelled;
+			}
 			match resolved {
 				Resolved::Intrinsic(IntrinsicId::Command)
 					if argv.len() > 1

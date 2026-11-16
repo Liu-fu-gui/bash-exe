@@ -80,6 +80,7 @@ macro_rules! for_each_extra {
 			utility [feature = "util.printenv"] "printenv" printenv::Printenv;
 			utility [feature = "util.readlink"] "readlink" readlink::Readlink;
 			utility [feature = "util.realpath"] "realpath" realpath::Realpath;
+			utility [feature = "util.rev"] "rev" rev::Rev;
 			utility [feature = "util.rm"] "rm" rm::Rm;
 			utility [feature = "util.rmdir"] "rmdir" rmdir::Rmdir;
 			utility [all(feature = "util.rsync", any(unix, windows))] "rsync" rsync::Rsync;

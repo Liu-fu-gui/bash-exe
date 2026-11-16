@@ -45,7 +45,9 @@ working around that.
 - **What scripts written for Git Bash expect**: `uname -s` is
   `MINGW64_NT-…` and `$OSTYPE` `msys`; `diff <(a) <(b)`, `/dev/stdin`,
   `/dev/stderr`, `/dev/zero` and `/dev/urandom` work; a `#!/usr/bin/env node`
-  script runs with node; `env` and `xargs` find `node.exe` and `npm.cmd`;
+  script runs with node, and `/usr/bin/env`, `/bin/bash` and the like work as
+  commands; `env` and `xargs` find `node.exe` and `npm.cmd` (`env -i` too);
+  `pwd -W` prints `C:/…`; `rev` is there;
   `sed` edits files that are not UTF-8 (GBK) without touching their other
   bytes; `chmod` sets and clears the read-only attribute.
 
