@@ -80,6 +80,22 @@ fn exit_status_and_exit_trap() {
 	assert_eq!(out, "1\n");
 }
 
+/// The EXIT trap also runs when the input just ends, once, and keeps the
+/// last command's status; its subshells only list it.
+#[test]
+fn exit_trap_at_the_end_of_input() {
+	let (out, ..) = run("bash -c 'trap \"echo bye\" EXIT; (echo sub); echo body; false'; echo $?");
+	assert_eq!(out, "sub\nbody\nbye\n1\n");
+	let (out, err, _) = run(
+		"printf '%s\\n' 'trap \"echo bye \\$?\" EXIT' 'echo body' > s.sh; bash s.sh; echo $?; bash \
+		 -c 'trap \"echo inner\" EXIT; bash s.sh'",
+	);
+	assert_eq!(err, "");
+	assert_eq!(out, "body\nbye 0\n0\nbody\nbye 0\ninner\n");
+	let (out, ..) = run("bash -c 'trap \"echo bye; exit 5\" EXIT; echo body'; echo $?");
+	assert_eq!(out, "body\nbye\n5\n");
+}
+
 /// Invocation flags: set flags, inherited `SHELLOPTS`, `sh` is posix mode.
 #[test]
 fn options_from_flags_environment_and_name() {

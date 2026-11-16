@@ -386,6 +386,8 @@ impl Lookup {
 			.first()
 			.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
 		let cwd = command.dir().unwrap_or(&self.cwd);
+		// As in the shell: Windows' `/usr/bin/env` is `env`.
+		let name = unix_bin_name(name).unwrap_or(name);
 		if has_separator(name) {
 			return match runnable(cwd.join(name), &self.pathext) {
 				Ok(path) => Ok(Program::Path(path)),
@@ -405,6 +407,9 @@ impl Lookup {
 				EnvChange::Set(var, value) if var == "PATH" => Some(value.as_str()),
 				_ => path,
 			})
+			// Windows' own search (`CreateProcess`, Rust's `Command`) falls
+			// back to the parent's `PATH`: `env -i node` finds `node.exe`.
+			.or_else(|| self.path.as_deref().filter(|_| cfg!(windows)))
 			.unwrap_or(DEFAULT_PATH);
 		let mut denied = false;
 		for dir in std::env::split_paths(OsStr::new(path)) {
@@ -422,14 +427,27 @@ impl Lookup {
 		Err(kind.into())
 	}
 
-	/// Whether `name` runs in-process: an engine intrinsic, a tool or an
-	/// extra this shell offers.
+	/// Whether `name` runs in-process: an engine intrinsic, a tool, an
+	/// extra this shell offers or, on Windows, the shell itself.
 	fn builtin(&self, name: &OsStr) -> bool {
 		let name = os_bytes(name);
-		IntrinsicId::lookup(&name, ModeId::Bash).is_some()
+		(cfg!(windows) && matches!(name.as_slice(), b"bash" | b"sh" | b"zsh"))
+			|| IntrinsicId::lookup(&name, ModeId::Bash).is_some()
 			|| self.config.lookup(name.as_bstr()).is_some()
 			|| self.config.native_extra(name.as_bstr()).is_some()
 	}
+}
+
+/// On Windows, the command name in `/bin/NAME`, `/usr/bin/NAME` or
+/// `/usr/local/bin/NAME` (no such directories there).
+fn unix_bin_name(path: &OsStr) -> Option<&OsStr> {
+	if !cfg!(windows) {
+		return None;
+	}
+	let base = ["/bin/", "/usr/bin/", "/usr/local/bin/"]
+		.into_iter()
+		.find_map(|dir| path.to_str()?.strip_prefix(dir))?;
+	(!base.is_empty() && !has_separator(OsStr::new(base))).then(|| OsStr::new(base))
 }
 
 fn has_separator(name: &OsStr) -> bool {

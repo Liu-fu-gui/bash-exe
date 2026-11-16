@@ -192,6 +192,8 @@ mod printenv;
 mod readlink;
 #[cfg(feature = "util.realpath")]
 mod realpath;
+#[cfg(feature = "util.rev")]
+mod rev;
 #[cfg(feature = "util.rg")]
 mod rg;
 #[cfg(feature = "util.rm")]

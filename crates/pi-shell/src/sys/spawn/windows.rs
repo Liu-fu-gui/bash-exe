@@ -807,10 +807,16 @@ fn command(path: &BStr, argv: &[BString]) -> io::Result<(Vec<u16>, Vec<u16>)> {
 	Ok((app, line))
 }
 
+/// Variables a Windows program cannot start without (`SYSTEMROOT`: Node's
+/// and Python's random numbers): added from this process's when the
+/// command's environment has none, as Cygwin does, so `env -i node` runs.
+const FORCED_VARS: [&str; 3] = ["SYSTEMDRIVE", "SYSTEMROOT", "WINDIR"];
+
 /// `CREATE_UNICODE_ENVIRONMENT` block: `K=V\0…\0`, sorted by name without
-/// case as Windows requires (case-insensitive duplicates: the last wins).
+/// case as Windows requires (case-insensitive duplicates: the last wins),
+/// with [`FORCED_VARS`].
 fn env_block(env: &EnvView) -> io::Result<Vec<u16>> {
-	let mut vars: Vec<(String, &str)> = Vec::with_capacity(env.len());
+	let mut vars: Vec<(String, String, String)> = Vec::with_capacity(env.len() + FORCED_VARS.len());
 	for (k, v) in env.iter() {
 		let k = k.to_str().map_err(invalid)?;
 		let v = v.to_str().map_err(invalid)?;
@@ -818,12 +824,16 @@ fn env_block(env: &EnvView) -> io::Result<Vec<u16>> {
 		if k.contains('\0') || v.contains('\0') || k.get(1..).is_some_and(|r| r.contains('=')) {
 			return Err(invalid("environment entry contains NUL or `=` in its name"));
 		}
-		vars.push((k.to_uppercase(), v));
+		vars.push((k.to_uppercase(), k.to_owned(), v.to_owned()));
 	}
-	let names: Vec<&str> = env
-		.iter()
-		.map(|(k, _)| k.to_str().unwrap_or_default())
-		.collect();
+	for name in FORCED_VARS {
+		if vars.iter().any(|(upper, ..)| upper == name) {
+			continue;
+		}
+		if let Ok(value) = std::env::var(name) {
+			vars.insert(0, (name.to_owned(), name.to_owned(), value));
+		}
+	}
 	let mut order: Vec<usize> = (0..vars.len()).collect();
 	order.sort_by(|&a, &b| vars[a].0.cmp(&vars[b].0));
 	order.dedup_by(|later, earlier| {
@@ -835,9 +845,9 @@ fn env_block(env: &EnvView) -> io::Result<Vec<u16>> {
 	});
 	let mut block = Vec::new();
 	for i in order {
-		block.extend(names[i].encode_utf16());
-		block.push(u16::from(b'='));
 		block.extend(vars[i].1.encode_utf16());
+		block.push(u16::from(b'='));
+		block.extend(vars[i].2.encode_utf16());
 		block.push(0);
 	}
 	if block.is_empty() {
