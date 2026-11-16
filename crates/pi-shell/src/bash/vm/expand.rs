@@ -2884,6 +2884,19 @@ fn dynamic_value(
 			DynVal::Str(BString::from(format!("{}.{:06}", w.secs, w.nanos / 1000)))
 		},
 		b"LINENO" => DynVal::Str(BString::from(line.format_into(&mut NumBuffer::new()))),
+		// bash's `$_`: the last word of the previous simple command; before
+		// the first one the shell's path (`$BASH`), never unset (`set -u`
+		// scripts read it: bats' DEBUG trap).
+		b"_" if vp.mode.dialect() == crate::bash::ids::Dialect::Bash => {
+			let last = crate::bash::store::Key::Misc(crate::bash::store::MiscKey::LastArg);
+			match state::record(cx.store, vp, last)? {
+				Some(crate::bash::store::Record::Misc(v)) => DynVal::Str(v.clone()),
+				_ => match state::lookup(&k.root, cx.store, vp, b"BASH")?.and_then(|v| v.as_scalar()) {
+					Some(path) => DynVal::Str(BString::from(path)),
+					None => return Ok(None),
+				},
+			}
+		},
 		b"BASH_COMMAND" => DynVal::Str(BString::from(vp.command_text())),
 		b"BASH_CMDS" => DynVal::Assoc(hash_table(k, cx, vp, crate::bash::store::Table::CmdHash)?),
 		b"BASH_ALIASES" => DynVal::Assoc(hash_table(k, cx, vp, crate::bash::store::Table::Alias)?),
@@ -2912,10 +2925,11 @@ fn dynamic_value(
 /// Whether [`Expander::dynamic`] computes `name` (keep in sync).
 const fn is_dynamic(name: &[u8]) -> bool {
 	// Most names fail on the first byte, before the string compares.
-	matches!(name.first(), Some(b'B' | b'D' | b'E' | b'F' | b'L' | b'P' | b'R' | b'S'))
+	matches!(name.first(), Some(b'B' | b'D' | b'E' | b'F' | b'L' | b'P' | b'R' | b'S' | b'_'))
 		&& matches!(
 			name,
-			b"RANDOM"
+			b"_"
+				| b"RANDOM"
 				| b"SRANDOM"
 				| b"SECONDS"
 				| b"EPOCHSECONDS"

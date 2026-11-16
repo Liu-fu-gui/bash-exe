@@ -47,6 +47,7 @@ macro_rules! for_each_extra {
 			utility [feature = "util.cp"] "cp" cp::Cp;
 			utility [feature = "util.combine"] "combine" combine::Combine;
 			utility [feature = "util.cut"] "cut" cut::Cut;
+			utility [all(feature = "util.cygpath", windows)] "cygpath" cygpath::Cygpath;
 			utility [feature = "util.date"] "date" date::Date;
 			utility [feature = "util.dd"] "dd" dd::Dd;
 			utility [feature = "util.df"] "df" df::Df;

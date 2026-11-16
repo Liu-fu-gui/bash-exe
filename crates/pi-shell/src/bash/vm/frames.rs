@@ -267,6 +267,9 @@ struct ProcImage {
 	calls:         Vec<super::callstack::Call>,
 	/// The pseudo-signal traps the vproc set itself.
 	own_traps:     super::proc::OwnTraps,
+	/// The traps running in the shell that forked it.
+	#[serde(default)]
+	outer_traps:   super::proc::OwnTraps,
 	/// Current mode (the root's is also `MiscKey::Mode`).
 	mode:          ModeId,
 	/// zsh state (sticky emulation, frames' restores).
@@ -629,6 +632,7 @@ impl Shell {
 				command,
 				calls: p.calls.clone(),
 				own_traps: p.own_traps,
+				outer_traps: p.outer_traps,
 				mode: p.mode,
 				zsh: p.zsh.clone(),
 				lineage: p.lineage,
@@ -864,6 +868,7 @@ impl Shell {
 			vp.subshell = p.subshell;
 			vp.calls = p.calls;
 			vp.own_traps = p.own_traps;
+			vp.outer_traps = p.outer_traps;
 			vp.mode = p.mode;
 			vp.zsh = p.zsh;
 			vp.lineage = p.lineage;

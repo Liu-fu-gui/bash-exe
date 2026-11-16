@@ -742,6 +742,12 @@ fn run_boundary(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>) -> bool {
 			k.root.set_positional(cx.store, args);
 		}
 		if let Some(cwd) = run.cwd.take() {
+			// The engine's Windows spelling, as `cd` keeps it.
+			let cwd = if k.engine.config().platform == crate::bash::ids::Platform::Windows {
+				crate::bash::fs::windows_slash_path(&cwd, &cwd)
+			} else {
+				cwd
+			};
 			if !matches!(state::root_misc(cx.store, MiscKey::Cwd), Ok(Some(v)) if v == cwd.as_slice())
 			{
 				k.root.set_misc(cx.store, MiscKey::Cwd, cwd.clone());
@@ -4602,7 +4608,10 @@ pub const fn mode_of(vp: &Vproc) -> ModeId {
 /// the list is skipped, [`zsh_debug_done`]); before the list
 /// `$ZSH_DEBUG_CMD` holds its text. Whether the trap started.
 fn zsh_debug_trap(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, unit: &Unit, op: Op) -> bool {
-	if vp.trap_frames != 0 || !pseudo_trap_maybe(k, cx, TrapKey::Debug) {
+	if vp.trap_frames != 0
+		|| vp.outer_traps.has(TrapKey::Debug)
+		|| !pseudo_trap_maybe(k, cx, TrapKey::Debug)
+	{
 		return false;
 	}
 	let opt = |k: &mut Kernel, cx: &mut Cx<'_>, vp: &Vproc, o| {
@@ -4724,8 +4733,12 @@ pub fn start_trap(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, key: TrapKey)
 			}
 		}
 	}
-	// No trap runs inside its own action; a function called from the
-	// DEBUG trap loses the RETURN trap (bash's `execute_function`).
+	// No trap runs inside its own action, nor in a subshell forked inside
+	// it; a function called from the DEBUG trap loses the RETURN trap
+	// (bash's `execute_function`).
+	if vp.outer_traps.has(key) || (key == TrapKey::Return && vp.outer_traps.has(TrapKey::Debug)) {
+		return false;
+	}
 	if vp.trap_frames != 0
 		&& vp.frames.iter().any(|f| {
 			matches!(f.kind,

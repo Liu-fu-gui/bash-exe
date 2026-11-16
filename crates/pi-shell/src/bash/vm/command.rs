@@ -849,6 +849,16 @@ fn expand(
 	}
 	if unit.mode.dialect() == crate::bash::ids::Dialect::Zsh {
 		zsh_last_arg(k, vp, cx);
+	} else {
+		// bash's `$_`: the command's last word, empty for an assignment.
+		let last = st(vp).argv.last().cloned().unwrap_or_default();
+		state::store_record(
+			&mut k.root,
+			cx.store,
+			vp,
+			KeyBuf::Misc(MiscKey::LastArg),
+			Some(Record::Misc(last)),
+		);
 	}
 	let assign_only = st(vp).argv.is_empty();
 	if !assign_only && !cmd.assigns.is_empty() && !st(vp).scoped {
@@ -4230,6 +4240,20 @@ fn exec_builtin(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, line: u32) -> O
 		None
 	} else if name.contains(&b'/') {
 		Some(Target::External(absolute(&vp.cwd, &name)))
+	} else if k.engine.config().platform == crate::bash::ids::Platform::Windows {
+		// What Git Bash's `exec` finds in `/usr/bin` is a built-in tool or
+		// this shell here, not `PATH`'s `bash` (WSL's): bats' launcher runs
+		// `exec env … script` with a `#!/usr/bin/env bash` line.
+		let rctx = ResolveCtx { has_slash: false, via: Via::Exec };
+		match cx.host.resolve(BStr::new(&name), vp.mode, rctx) {
+			Resolved::SelfShell => Some(Target::SelfShell),
+			resolved @ (Resolved::Tool(_) | Resolved::Native(_))
+				if !cx.host.defers_to_path(BStr::new(&name), &argv[i..]) =>
+			{
+				Some(resolved.into())
+			},
+			_ => Some(Target::Search),
+		}
 	} else {
 		Some(Target::Search)
 	};

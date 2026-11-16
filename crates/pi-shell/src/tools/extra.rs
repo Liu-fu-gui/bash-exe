@@ -389,7 +389,16 @@ impl Lookup {
 		// As in the shell: Windows' `/usr/bin/env` is `env`.
 		let name = unix_bin_name(name).unwrap_or(name);
 		if has_separator(name) {
-			return match runnable(cwd.join(name), &self.pathext) {
+			// An MSYS alias (`/c/x`, `/tmp/x`) is the drive path, as in the
+			// shell.
+			let file = cfg!(windows)
+				.then(|| crate::bash::fs::msys_drive_path(name.as_encoded_bytes()))
+				.flatten()
+				.map_or_else(
+					|| cwd.join(name),
+					|p| PathBuf::from(String::from_utf8_lossy(&p).into_owned()),
+				);
+			return match runnable(file, &self.pathext) {
 				Ok(path) => Ok(Program::Path(path)),
 				Err(true) => Err(io::ErrorKind::PermissionDenied.into()),
 				Err(false) => Err(io::ErrorKind::NotFound.into()),
@@ -412,8 +421,11 @@ impl Lookup {
 			.or_else(|| self.path.as_deref().filter(|_| cfg!(windows)))
 			.unwrap_or(DEFAULT_PATH);
 		let mut denied = false;
-		for dir in std::env::split_paths(OsStr::new(path)) {
-			match runnable(cwd.join(dir).join(name), &self.pathext) {
+		// A `:`-appended entry and an MSYS drive alias count on Windows too.
+		for dir in pi_vfs::path_list(path.as_bytes(), cfg!(windows)) {
+			let dir = pi_vfs::windows_path_entry(dir);
+			let dir = String::from_utf8_lossy(&dir);
+			match runnable(cwd.join(&*dir).join(name), &self.pathext) {
 				Ok(path) => return Ok(Program::Path(path)),
 				Err(true) => denied = true,
 				Err(false) => {},

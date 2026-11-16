@@ -108,6 +108,12 @@ pub struct Vproc {
 	/// `errtrace`/`functrace`; bash 5.3 keeps listing inherited signal
 	/// traps until the subshell changes one).
 	pub own_traps:     OwnTraps,
+	/// The DEBUG, ERR and RETURN traps whose actions were running in the
+	/// parent when it forked this vproc ([`Vproc::traps_running`]): bash's
+	/// `running_trap` is a variable a child process copies, so a `$( )` in
+	/// a DEBUG trap under `set -T` does not run the trap again (bats'
+	/// `bats_debug_trap` recursed until memory ran out).
+	pub outer_traps:   OwnTraps,
 	/// Trap-action frames ([`ScriptKind::Trap`]) on `frames`: zero lets
 	/// the per-op checks (cancellation, `BASH_COMMAND`, a trap inside its
 	/// own action) skip their frame scans. Kept by
@@ -127,6 +133,25 @@ pub struct Vproc {
 	/// Inherited (copied) by children; never serialized: a restored shell
 	/// starts with zsh's defaults and no line in progress.
 	pub zle:           Option<Box<super::zle::Zle>>,
+}
+
+impl Vproc {
+	/// The DEBUG, ERR and RETURN traps whose actions are running here or
+	/// were running in an outer shell when it forked this vproc.
+	pub fn traps_running(&self) -> OwnTraps {
+		use crate::bash::store::TrapKey;
+		let mut set = self.outer_traps;
+		if self.trap_frames != 0 {
+			for frame in &self.frames {
+				if let FrameKind::Script { what: ScriptKind::Trap { key, .. }, .. } = &frame.kind
+					&& matches!(key, TrapKey::Debug | TrapKey::Err | TrapKey::Return)
+				{
+					set = set.with(*key);
+				}
+			}
+		}
+		set
+	}
 }
 
 /// The terminal of the session a vproc runs in when it is not the shell's

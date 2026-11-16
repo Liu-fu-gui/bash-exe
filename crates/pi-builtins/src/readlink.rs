@@ -12,7 +12,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use pi_vfs::{BlockingFs, CanonicalizeOptions, MissingHandling, ResolveMode};
 use uucore::{display::Quotable, libc::EINVAL, line_ending::LineEnding};
 
-use crate::host::{Host, Utility, format_usage, matches_parser, os_bytes};
+use crate::host::{Host, Utility, format_usage, forward_slash_display, matches_parser, os_bytes};
 
 const OPT_CANONICALIZE: &str = "canonicalize";
 const OPT_CANONICALIZE_MISSING: &str = "canonicalize-missing";
@@ -232,6 +232,9 @@ fn canonicalize_path(
 
 /// Writes a resolved path verbatim, followed by the selected delimiter.
 fn show(out: &mut impl Write, path: &Path, line_ending: Option<LineEnding>) -> std::io::Result<()> {
+	// `C:/x`, as the shell spells `$PWD`.
+	let slashed = forward_slash_display(path);
+	let path = slashed.as_deref().unwrap_or(path);
 	let bytes = os_bytes(path.as_os_str())
 		.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid path"))?;
 	out.write_all(bytes)?;

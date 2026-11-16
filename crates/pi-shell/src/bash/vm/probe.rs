@@ -8,7 +8,7 @@
 
 use std::task::{Context, Poll};
 
-use bstr::{BStr, BString};
+use bstr::{BStr, BString, ByteSlice};
 
 use super::{
 	Cx, Kernel,
@@ -587,13 +587,17 @@ pub fn candidates(
 	let suffixes = if has_extension { &[] } else { extensions };
 	let windows = platform == Platform::Windows;
 	let mut out = Vec::new();
-	for dir in path.split(|&c| c == path_separator(platform)) {
+	for dir in pi_vfs::path_list(path, windows) {
 		let mut base = if dir.is_empty() {
 			BString::from(cwd)
 		} else {
 			absolute_on(cwd, dir, platform)
 		};
-		if !(base.ends_with(b"/") || windows && base.ends_with(b"\\")) {
+		// `C:/Windows/x`, as the shell spells paths (`command -v`, `type`).
+		if windows && !base.starts_with(br"\\?\") {
+			base = base.replace(b"\\", b"/").into();
+		}
+		if !base.ends_with(b"/") {
 			base.push(b'/');
 		}
 		base.extend_from_slice(name);
@@ -790,24 +794,26 @@ mod tests {
 				.map(|p| String::from_utf8_lossy(&p).into_owned())
 				.collect()
 		};
+		// `C:/Tools/tool`: entries are spelled with `/`, as `command -v` shows
+		// them.
 		assert_eq!(win(br"C:\Tools;;rel", b"tool"), [
-			r"C:\Tools/tool",
-			r"C:\Tools/tool.exe",
-			r"C:\Tools/tool.cmd",
-			r"C:\project/tool",
-			r"C:\project/tool.exe",
-			r"C:\project/tool.cmd",
-			r"C:\project/rel/tool",
-			r"C:\project/rel/tool.exe",
-			r"C:\project/rel/tool.cmd",
+			"C:/Tools/tool",
+			"C:/Tools/tool.exe",
+			"C:/Tools/tool.cmd",
+			"C:/project/tool",
+			"C:/project/tool.exe",
+			"C:/project/tool.cmd",
+			"C:/project/rel/tool",
+			"C:/project/rel/tool.exe",
+			"C:/project/rel/tool.cmd",
 		]);
 		// A name already carrying a PATHEXT suffix is not re-suffixed; any other
 		// dot is.
-		assert_eq!(win(b"", b"tool.EXE"), [r"C:\project/tool.EXE"]);
+		assert_eq!(win(b"", b"tool.EXE"), ["C:/project/tool.EXE"]);
 		assert_eq!(win(b"", b"my.tool"), [
-			r"C:\project/my.tool",
-			r"C:\project/my.tool.exe",
-			r"C:\project/my.tool.cmd"
+			"C:/project/my.tool",
+			"C:/project/my.tool.exe",
+			"C:/project/my.tool.cmd"
 		]);
 	}
 

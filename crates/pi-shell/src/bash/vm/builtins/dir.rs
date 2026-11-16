@@ -45,10 +45,8 @@ pub fn logical(cwd: &[u8], dir: &[u8]) -> BString {
 			|| matches!(dir.components().next(), Some(std::path::Component::Prefix(_))))
 	{
 		let path = pi_vfs::absolute_path(cwd, dir);
-		return pi_vfs::normalize_lexically(&path)
-			.into_os_string()
-			.into_encoded_bytes()
-			.into();
+		let path = pi_vfs::normalize_lexically(&path).into_os_string();
+		return crate::bash::fs::windows_slash_path(path.as_encoded_bytes(), b"");
 	}
 	let mut parts: Vec<&[u8]> = Vec::new();
 	let full: Vec<u8>;
@@ -122,8 +120,8 @@ pub fn cd(ctx: &mut Ctx<'_, '_>, args: &[BString]) -> R {
 	let relative =
 		!target.starts_with(b"/") && !target.starts_with(b".") && url_root_len(&target).is_none();
 	if relative && let Some(cdpath) = ctx.scalar(b"CDPATH")? {
-		let sep = crate::bash::vm::probe::path_separator(ctx.k.engine.config().platform);
-		for dir in cdpath.split(|&c| c == sep) {
+		let windows = ctx.k.engine.config().platform == crate::bash::ids::Platform::Windows;
+		for dir in pi_vfs::path_list(&cdpath, windows) {
 			if dir.is_empty() {
 				continue;
 			}
@@ -418,21 +416,19 @@ mod tests {
 	#[cfg(windows)]
 	#[test]
 	fn logical_windows_paths_preserve_drive_and_share_roots() {
-		assert_eq!(logical(br"C:\work\app", br"..\src\.\module"), br"C:\work\src\module".as_slice());
-		assert_eq!(logical(br"C:\work\app", br"D:\other\..\target"), br"D:\target".as_slice());
-		assert_eq!(
-			logical(br"\\server\share\a", br"..\..\..\target"),
-			br"\\server\share\target".as_slice()
-		);
-		assert_eq!(logical(br"\\?\C:\work\a", br"..\target"), br"\\?\C:\work\target".as_slice());
-		assert_eq!(logical(b"virtual://dir", br"C:\work"), br"C:\work".as_slice());
-		assert_eq!(logical(b"virtual://dir", br"C:\work\..\target"), br"C:\target".as_slice());
-		assert_eq!(logical(b"virtual://dir", br"\\server\share\a"), br"\\server\share\a".as_slice());
-		assert_eq!(logical(br"C:\work", b"/d/other/../target"), br"D:\target".as_slice());
+		assert_eq!(logical(br"C:\work\app", br"..\src\.\module"), "C:/work/src/module");
+		assert_eq!(logical(b"C:/work/app", b"../src"), "C:/work/src");
+		assert_eq!(logical(br"C:\work\app", br"D:\other\..\target"), "D:/target");
+		assert_eq!(logical(br"\\server\share\a", br"..\..\..\target"), "//server/share/target");
+		assert_eq!(logical(br"\\?\C:\work\a", br"..\target"), "C:/work/target");
+		assert_eq!(logical(b"virtual://dir", br"C:\work"), "C:/work");
+		assert_eq!(logical(b"virtual://dir", br"C:\work\..\target"), "C:/target");
+		assert_eq!(logical(b"virtual://dir", br"\\server\share\a"), "//server/share/a");
+		assert_eq!(logical(br"C:\work", b"/d/other/../target"), "D:/target");
 		let temp = std::env::temp_dir();
 		assert_eq!(
 			logical(b"virtual://dir", b"/tmp/x"),
-			temp.join("x").as_os_str().as_encoded_bytes()
+			temp.join("x").to_string_lossy().replace('\\', "/")
 		);
 	}
 

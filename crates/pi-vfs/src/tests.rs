@@ -858,3 +858,26 @@ fn fifo_write_opens_through_a_cancellable_view_wait_for_a_reader_and_observe_the
 		}
 	}
 }
+
+/// A Windows `PATH` takes `:`-appended entries too (`PATH="$PATH:/c/x"`),
+/// but not a drive's or a URL's colon.
+#[test]
+fn path_lists_split_posix_entries_on_windows() {
+	let list = |s: &str, windows| -> Vec<String> {
+		path_list(s.as_bytes(), windows)
+			.into_iter()
+			.map(|e| String::from_utf8(e.to_vec()).unwrap())
+			.collect()
+	};
+	assert_eq!(list(r"C:\Windows;D:/bin:/usr/bin:/c/x", true), [
+		r"C:\Windows",
+		"D:/bin",
+		"/usr/bin",
+		"/c/x"
+	]);
+	assert_eq!(list("/a:C:/b;skill://x:", true), ["/a", "C:/b", "skill://x", ""]);
+	assert_eq!(list("C:", true), ["C:"]);
+	assert_eq!(list("/a:C:/b", false), ["/a", "C", "/b"]);
+	assert_eq!(&*windows_path_entry(b"/c/Tools"), b"C:/Tools");
+	assert_eq!(&*windows_path_entry(br"C:\x"), br"C:\x");
+}

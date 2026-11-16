@@ -331,6 +331,8 @@ async fn every_utility_builtin_is_registered_under_its_own_name() {
 		"comm",
 		"cp",
 		"cut",
+		#[cfg(windows)]
+		"cygpath",
 		"date",
 		"dd",
 		"df",

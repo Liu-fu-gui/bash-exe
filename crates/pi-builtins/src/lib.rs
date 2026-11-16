@@ -194,6 +194,8 @@ mod readlink;
 mod realpath;
 #[cfg(feature = "util.rev")]
 mod rev;
+#[cfg(all(feature = "util.cygpath", any(windows, test)))]
+mod cygpath;
 #[cfg(feature = "util.rg")]
 mod rg;
 #[cfg(feature = "util.rm")]

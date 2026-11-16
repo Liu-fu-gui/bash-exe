@@ -15,7 +15,9 @@ use clap::{
 use pi_vfs::{BlockingFs, CanonicalizeOptions, MissingHandling, ResolveMode, relative_path};
 use uucore::{display::Quotable, line_ending::LineEnding};
 
-use crate::host::{Host, Utility, format_usage, matches_parser, os_bytes, strip_errno};
+use crate::host::{
+	Host, Utility, format_usage, forward_slash_display, matches_parser, os_bytes, strip_errno,
+};
 
 const OPT_QUIET: &str = "quiet";
 const OPT_STRIP: &str = "strip";
@@ -325,6 +327,8 @@ fn resolve_path(
 	let (absolute, _) =
 		canonicalize_path(host.fs(), &host.resolve(path), &CanonicalizeOptions::new(can_mode, resolve))?;
 	let output_path = process_relative(absolute, relative_base, relative_to);
+	// `C:/x`, as the shell spells `$PWD`.
+	let output_path = forward_slash_display(&output_path).unwrap_or(output_path);
 	let bytes = os_bytes(output_path.as_os_str())
 		.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path is not valid Unicode"))?;
 	host.stdout.write_all(bytes)?;
