@@ -2143,7 +2143,11 @@ async fn execute_search<M: Matcher<Captures: Send> + Clone + Send + Sync + 'stat
 					},
 				}
 			},
-			Ok(meta) if meta.is_file() => {
+			// A pipe or device named on the command line (`<(…)`, `/dev/stdin`)
+			// is searched as a file is.
+			Ok(meta)
+				if meta.is_file() || meta.file_type().is_fifo() || meta.file_type().is_char_device() =>
+			{
 				let halt = HaltOnDrop::new();
 				let shared = dir_search(
 					host,

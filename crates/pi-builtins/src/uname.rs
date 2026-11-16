@@ -123,14 +123,22 @@ impl UNameOutput {
 				PROCESSOR_ARCHITECTURE_SHX => "superh",
 				_ => "unknown",
 			};
+			// Git Bash's names (`MINGW64_NT-10.0-26100`, `Msys`): what scripts
+			// test for Windows (`case $(uname -s) in MINGW*|MSYS*|CYGWIN*`).
 			(
-				(opts.kernel_name || opts.all || none).then(|| "Windows_NT".into()),
+				(opts.kernel_name || opts.all || none).then(|| {
+					format!(
+						"MINGW64_NT-{}.{}-{}",
+						version.dwMajorVersion, version.dwMinorVersion, version.dwBuildNumber
+					)
+					.into()
+				}),
 				(opts.nodename || opts.all).then_some(nodename),
 				(opts.kernel_release || opts.all)
 					.then(|| format!("{}.{}", version.dwMajorVersion, version.dwMinorVersion).into()),
 				(opts.kernel_version || opts.all).then(|| version.dwBuildNumber.to_string().into()),
 				(opts.machine || opts.all).then(|| architecture.into()),
-				(opts.os || opts.all).then(|| windows_os_name(&version)),
+				(opts.os || opts.all).then(|| "Msys".into()),
 			)
 		};
 
@@ -245,48 +253,6 @@ fn windows_nodename() -> std::io::Result<OsString> {
 	// Only the code units written by the API become initialized elements.
 	unsafe { buffer.set_len(size as usize) };
 	Ok(OsString::from_wide(&buffer))
-}
-
-#[cfg(windows)]
-fn windows_os_name(
-	version: &windows_sys::Win32::System::SystemInformation::OSVERSIONINFOEXW,
-) -> OsString {
-	use windows_sys::Win32::System::SystemServices::{VER_NT_WORKSTATION, VER_SUITE_WH_SERVER};
-
-	let workstation = u32::from(version.wProductType) == VER_NT_WORKSTATION;
-	let name = match (version.dwMajorVersion, version.dwMinorVersion) {
-		(5, 0) => "Windows 2000",
-		(5, 1) => "Windows XP",
-		(5, 2) if workstation => "Windows XP Professional x64 Edition",
-		(5, 2) if u32::from(version.wSuiteMask) == VER_SUITE_WH_SERVER => "Windows Home Server",
-		(5, 2) => "Windows Server 2003",
-		(6, 0) if workstation => "Windows Vista",
-		(6, 0) => "Windows Server 2008",
-		(6, 1) if workstation => "Windows 7",
-		(6, 1) => "Windows Server 2008 R2",
-		(6, 2) if workstation => "Windows 8",
-		(6, 2) => "Windows Server 2012",
-		(6, 3) if workstation => "Windows 8.1",
-		(6, 3) => "Windows Server 2012 R2",
-		(10, 0) if workstation && version.dwBuildNumber >= 22000 => "Windows 11",
-		(10, 0) if !workstation && (14000..17000).contains(&version.dwBuildNumber) => {
-			"Windows Server 2016"
-		},
-		(10, 0) if !workstation && (17000..19000).contains(&version.dwBuildNumber) => {
-			"Windows Server 2019"
-		},
-		(10, 0) if !workstation && version.dwBuildNumber >= 20000 => "Windows Server 2022",
-		(10, _) => "Windows 10",
-		_ => {
-			let family = if workstation { "Windows" } else { "Windows Server" };
-			return format!(
-				"MS/Windows ({family} {}.{})",
-				version.dwMajorVersion, version.dwMinorVersion,
-			)
-			.into();
-		},
-	};
-	format!("MS/Windows ({name})").into()
 }
 
 struct Options {

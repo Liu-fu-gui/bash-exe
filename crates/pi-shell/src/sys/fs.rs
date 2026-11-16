@@ -972,6 +972,63 @@ fn chdir_check(path: &BStr) -> io::Result<()> {
 	access(path, Access::EXEC)
 }
 
+/// `/dev/zero`, `/dev/random` and `/dev/urandom`, which Windows lacks
+/// (`tr -dc a-z0-9 < /dev/urandom | head -c 16`): endless zeros or random
+/// bytes; writes are taken and dropped.
+#[cfg(windows)]
+struct Device {
+	random: bool,
+}
+
+#[cfg(windows)]
+impl Device {
+	fn named(path: &BStr) -> Option<Self> {
+		match path.as_bytes() {
+			b"/dev/zero" => Some(Self { random: false }),
+			b"/dev/random" | b"/dev/urandom" => Some(Self { random: true }),
+			_ => None,
+		}
+	}
+}
+
+#[cfg(windows)]
+impl File for Device {
+	fn poll_read(&mut self, _cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+		if self.random {
+			if let Err(err) = getrandom::fill(buf) {
+				return Poll::Ready(Err(io::Error::other(err)));
+			}
+		} else {
+			buf.fill(0);
+		}
+		Poll::Ready(Ok(buf.len()))
+	}
+
+	fn poll_write(&mut self, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+		Poll::Ready(Ok(buf.len()))
+	}
+
+	fn poll_flush(&mut self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+		Poll::Ready(Ok(()))
+	}
+
+	fn seek(&mut self, _pos: io::SeekFrom) -> io::Result<u64> {
+		Ok(0)
+	}
+
+	fn kind(&self) -> FileKind {
+		FileKind::Device
+	}
+
+	fn os_handle(&self) -> Option<OsHandle> {
+		None
+	}
+
+	fn dup(&self) -> io::Result<Box<dyn File>> {
+		Ok(Box::new(Self { random: self.random }))
+	}
+}
+
 /// Named pipes for process substitution on Windows.
 ///
 /// [`pipe::create`] makes the server end and parks it; the producer side of
@@ -1135,6 +1192,10 @@ impl Fs for StdFs {
 		#[cfg(windows)]
 		if path.as_bytes() == b"/dev/tty" {
 			return FsPoll::Ready(crate::sys::console::open_tty());
+		}
+		#[cfg(windows)]
+		if let Some(device) = Device::named(path) {
+			return FsPoll::Ready(Ok(Box::new(device)));
 		}
 		#[cfg(unix)]
 		if flags.contains(OpenFlags::WRITE) && !flags.contains(OpenFlags::READ) {

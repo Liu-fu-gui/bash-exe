@@ -12,9 +12,14 @@
 //! 2 are the process's own. `-e`, `-u`, `-x` and `-l` may come with `-c`;
 //! the last does nothing, there being no profile to read.
 //!
-//! Anything else (a script, commands on stdin, an interactive shell,
-//! `--version`) is the engine as a process shell, the utilities standing in
-//! for the commands `PATH` lacks; `--version` ends with this build's.
+//! A script (`bash [OPTION]… script.sh [ARGS]`) or a `-c` with options of
+//! its own (`-o pipefail`) runs the same way, as `bash ARGS…` there: a shell
+//! the engine starts, with the utilities ahead of `PATH` as well, where a
+//! process shell would find System32's `sort` and Git's `xargs` first.
+//!
+//! Anything else (commands on stdin, an interactive shell, `--version`) is
+//! the engine as a process shell, the utilities standing in for the commands
+//! `PATH` lacks; `--version` ends with this build's.
 
 use std::{env, ffi::OsString, fs, io::Write as _, process::ExitCode};
 
@@ -35,7 +40,8 @@ fn main() -> ExitCode {
 		}
 		prepare_windows();
 	}
-	let status = match CommandLine::parse(args.get(1..).unwrap_or_default()) {
+	let rest = args.get(1..).unwrap_or_default();
+	let status = match CommandLine::parse(rest).or_else(|| CommandLine::nested(rest)) {
 		Some(line) => run(&line),
 		None => process::main(
 			args
@@ -137,6 +143,52 @@ impl CommandLine {
 			name: operands.next(),
 			args: operands.collect(),
 		})
+	}
+
+	/// `bash ARGS…` as a command line, for a script or a `-c` with options
+	/// [`CommandLine::parse`] leaves to the process shell; None for anything
+	/// else (no script, `-s`, `-i`, `--version`, `--help`) or arguments not
+	/// in Unicode.
+	fn nested(args: &[OsString]) -> Option<Self> {
+		let mut runs = false;
+		let mut args_iter = args.iter();
+		while let Some(arg) = args_iter.next() {
+			let arg = arg.to_str()?;
+			match arg {
+				"--" => {
+					runs = args_iter.next().is_some();
+					break;
+				},
+				"--version" | "--help" => return None,
+				"--rcfile" | "--init-file" | "-o" | "+o" | "-O" | "+O" => {
+					args_iter.next()?;
+				},
+				_ if arg.starts_with("--") => {},
+				_ if arg.len() > 1 && (arg.starts_with('-') || arg.starts_with('+')) => {
+					if arg[1..].contains(['s', 'i']) {
+						return None;
+					}
+					if arg.starts_with('-') && arg[1..].contains('c') {
+						runs = true;
+						break;
+					}
+				},
+				_ if arg == "-" => return None,
+				_ => {
+					runs = true;
+					break;
+				},
+			}
+		}
+		if !runs {
+			return None;
+		}
+		let mut command = String::from("bash");
+		for arg in args {
+			command.push(' ');
+			command.push_str(&quote(arg.to_str()?));
+		}
+		Some(Self { command, options: String::new(), name: None, args: Vec::new() })
 	}
 
 	/// The command with its options, `$0` and positional parameters set
@@ -461,5 +513,32 @@ mod tests {
 		assert_eq!(parse(&["-o", "pipefail", "-c", "true"]), None);
 		assert_eq!(parse(&[]), None);
 		assert_eq!(parse(&["-c"]), None);
+	}
+
+	fn nested(args: &[&str]) -> Option<String> {
+		CommandLine::nested(&args.iter().map(OsString::from).collect::<Vec<_>>())
+			.map(|line| line.script())
+	}
+
+	#[test]
+	fn scripts_run_in_a_shell_the_engine_starts() {
+		assert_eq!(nested(&["s.sh", "it's"]).as_deref(), Some("bash 's.sh' 'it'\\''s'"));
+		assert_eq!(nested(&["-e", "s.sh"]).as_deref(), Some("bash '-e' 's.sh'"));
+		assert_eq!(
+			nested(&["-o", "pipefail", "-c", "false | true"]).as_deref(),
+			Some("bash '-o' 'pipefail' '-c' 'false | true'")
+		);
+		assert_eq!(nested(&["--norc", "--", "s.sh"]).as_deref(), Some("bash '--norc' '--' 's.sh'"));
+	}
+
+	#[test]
+	fn stdin_and_interactive_shells_stay_the_process_shell() {
+		assert_eq!(nested(&[]), None);
+		assert_eq!(nested(&["-s", "a"]), None);
+		assert_eq!(nested(&["-i"]), None);
+		assert_eq!(nested(&["-"]), None);
+		assert_eq!(nested(&["--version"]), None);
+		assert_eq!(nested(&["-o", "pipefail"]), None);
+		assert_eq!(nested(&["-e"]), None);
 	}
 }

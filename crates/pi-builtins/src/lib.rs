@@ -94,6 +94,8 @@ mod sha512sum;
 mod shasum;
 #[cfg(all(feature = "util.chmod", unix))]
 mod chmod;
+#[cfg(all(feature = "util.chmod", windows))]
+mod chmod_windows;
 #[cfg(feature = "util.cmp")]
 mod cmp;
 #[cfg(feature = "util.comm")]

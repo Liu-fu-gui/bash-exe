@@ -4839,6 +4839,62 @@ fn run_script_file(
 		},
 		Ok(_) => BString::default(),
 	};
+	// Windows reads no `#!` line: the interpreter of one that is not a shell
+	// the engine is (`#!/usr/bin/env node`, `#!/usr/bin/python3`) runs the
+	// file, found on `PATH` (with `PATHEXT`) by its name, as Git Bash does.
+	if k.engine.config().platform == crate::bash::ids::Platform::Windows
+		&& let Some(shebang) = crate::sys::shebang::parse(&text)
+	{
+		use crate::sys::shebang::Launch;
+		let (prog, args, run) = match shebang.launch().for_windows() {
+			Launch::SelfShell { .. } => (BString::default(), Vec::new(), None),
+			Launch::Search { name, args } => {
+				let search = state::lookup(&k.root, cx.store, vp, b"PATH")
+					.ok()
+					.flatten()
+					.and_then(|v| v.as_scalar().map(BString::from))
+					.unwrap_or_default();
+				let probe = Probe::Path { name: BString::from(name), path: search };
+				let found = match command_probe(k, cx, vp, &probe) {
+					Err(key) => return Some(Flow::Block(key)),
+					Ok(ProbeResult::Path(found)) => found.map(|f| absolute(&vp.cwd, &f)),
+					Ok(_) => None,
+				};
+				(BString::from(name), args, Some(found))
+			},
+			Launch::Path { path, args } => {
+				let path = BString::from(path);
+				(path.clone(), args, Some(Some(path)))
+			},
+		};
+		let args: Vec<BString> = args.into_iter().map(BString::from).collect();
+		match run {
+			None => {},
+			Some(Some(run)) => {
+				let name = st(vp).argv[0].clone();
+				let file = if name.contains(&b'/') { name } else { path };
+				let s = st(vp);
+				let mut argv = Vec::with_capacity(s.argv.len() + args.len() + 1);
+				argv.push(prog);
+				argv.extend(args);
+				argv.push(file);
+				argv.extend(s.argv.drain(1..));
+				s.argv = argv;
+				s.target = Some(Target::Interp(run));
+				return None;
+			},
+			Some(None) => {
+				let name = st(vp).argv[0].clone();
+				let err = std::io::Error::from(std::io::ErrorKind::NotFound);
+				k.diag(cx, vp, line, Diag::BadInterpreter { name, interp: prog, err });
+				let s = st(vp);
+				s.status = 127;
+				s.stage = Stage::Finish;
+				exec_failed(k, cx, vp);
+				return None;
+			},
+		}
+	}
 	if looks_binary(&text) {
 		let name = st(vp).argv[0].clone();
 		k.diag(cx, vp, line, Diag::BinaryFile { name });

@@ -5151,33 +5151,75 @@ impl<'a> SliceLineCursor<'a> {
 	}
 }
 
+/// Bytes of input that are not UTF-8 (a GBK or Latin-1 file) stand for
+/// themselves in the pattern space as characters of a private range,
+/// `U+10FF80..=U+10FFFF` for bytes `0x80..=0xFF`, and go out again as those
+/// bytes: `sed 's/x/y/'` edits such a file, its other bytes untouched, as
+/// GNU sed does in the C locale, where it failed before.
+const RAW_BYTE_BASE: u32 = 0x10_FF00;
+
+/// `bytes` as pattern-space text, raw bytes as [`RAW_BYTE_BASE`] characters.
+pub(crate) fn decode_raw(bytes: &[u8]) -> String {
+	let mut text = String::with_capacity(bytes.len());
+	for chunk in bytes.utf8_chunks() {
+		text.push_str(chunk.valid());
+		for &byte in chunk.invalid() {
+			text.extend(char::from_u32(RAW_BYTE_BASE + u32::from(byte)));
+		}
+	}
+	text
+}
+
+/// The bytes `text` stands for: [`decode_raw`] undone.
+pub(crate) fn encode_raw(text: &str) -> std::borrow::Cow<'_, [u8]> {
+	// The range's characters are `F4 8F BE xx` and `F4 8F BF xx` in UTF-8.
+	if !text
+		.as_bytes()
+		.windows(3)
+		.any(|w| w[0] == 0xF4 && w[1] == 0x8F && w[2] >= 0xBE)
+	{
+		return std::borrow::Cow::Borrowed(text.as_bytes());
+	}
+	let mut bytes = Vec::with_capacity(text.len());
+	for ch in text.chars() {
+		match u32::from(ch).checked_sub(RAW_BYTE_BASE) {
+			Some(byte @ 0x80..=0xFF) => bytes.push(byte as u8),
+			_ => bytes.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes()),
+		}
+	}
+	std::borrow::Cow::Owned(bytes)
+}
+
 /// Buffered line reader from any BufRead input.
 pub struct ReadLineCursor {
 	reader: Box<dyn BufRead>,
-	buffer: String,
+	buffer: Vec<u8>,
 }
 
 impl ReadLineCursor {
 	/// Construct from anything that implements `Read`.
 	fn new<R: Read + 'static>(r: R) -> Self {
 		let buf = BufReader::new(r);
-		Self { reader: Box::new(buf), buffer: String::new() }
+		Self { reader: Box::new(buf), buffer: Vec::new() }
 	}
 
 
 	/// If a line is available, return it and its \n termination.
 	fn get_line(&mut self) -> io::Result<Option<(String, bool)>> {
 		self.buffer.clear();
-		// read_line *includes* the '\n' if present
-		let bytes_read = self.reader.read_line(&mut self.buffer)?;
+		// read_until *includes* the '\n' if present
+		let bytes_read = self.reader.read_until(b'\n', &mut self.buffer)?;
 		if bytes_read == 0 {
 			return Ok(None);
 		}
-		// O(1) check whether it ended in '\n'
-		let has_newline = self.buffer.ends_with('\n');
-		// strip it if you don’t want to expose it to the caller
-		if has_newline { self.buffer.pop(); }
-		let line = std::mem::take(&mut self.buffer);
+		let has_newline = self.buffer.ends_with(b"\n");
+		if has_newline {
+			self.buffer.pop();
+		}
+		let line = match String::from_utf8(std::mem::take(&mut self.buffer)) {
+			Ok(line) => line,
+			Err(err) => decode_raw(err.as_bytes()),
+		};
 		Ok(Some((line, has_newline)))
 	}
 
@@ -5456,6 +5498,12 @@ impl<'a> LineReader<'a> {
 			#[cfg(unix)]
 			LineReader::SliceInput { cursor, .. } => {
 				if let Some(NextSliceLine { content, full_span }) = cursor.get_line()? {
+					// A line that is not UTF-8 is copied, its raw bytes decoded.
+					if str::from_utf8(content).is_err() {
+						let has_newline = full_span.last() == Some(&b'\n');
+						let owned = IOChunkContent::new_owned(decode_raw(content), has_newline);
+						return Ok(Some(IOChunk::from_content(owned)));
+					}
 					let chunk = IOChunk::from_content(IOChunkContent::SliceInput { content, full_span });
 
 					Ok(Some(chunk))
@@ -5698,7 +5746,7 @@ impl OutputBuffer {
 
 			IOChunkContent::Owned { content, has_newline, .. } => {
 				self.flush_slice(WriteRange::Complete)?;
-				self.out.write_all(content.as_bytes())?;
+				self.out.write_all(&encode_raw(content))?;
 				if *has_newline {
 					self.out.write_all(b"\n")?;
 				}
@@ -5770,7 +5818,7 @@ impl OutputBuffer {
 
 		match &chunk.content {
 			IOChunkContent::Owned { content, has_newline, .. } => {
-				self.out.write_all(content.as_bytes())?;
+				self.out.write_all(&encode_raw(content))?;
 				if *has_newline {
 					self.out.write_all(b"\n")?;
 				}
@@ -9703,5 +9751,33 @@ mod tests {
 			crate::host::run_util::<Sed>(&["-n", "-f", "script.sed"], "saved\n", dir.path());
 		assert_eq!(code, 0, "{}", capture.err());
 		assert_eq!(std::fs::read(dir.path().join("output.txt")).unwrap(), b"saved\n");
+	}
+
+	/// A file that is not UTF-8 (GBK, Latin-1) is edited with its other
+	/// bytes as they were; it failed with `stream did not contain valid
+	/// UTF-8`.
+	#[test]
+	fn edits_input_that_is_not_utf8() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let file = dir.path().join("latin1.txt");
+		std::fs::write(&file, b"caf\xe9 x\n\xc4\xe3\xba\xc3 end\nlast \xff").expect("write");
+		let file = file.to_str().expect("utf-8 path");
+		let (code, capture) = crate::host::run_util::<Sed>(
+			&["s/x/y/; s/end/END/; s/^caf./cafe/", file],
+			"",
+			dir.path(),
+		);
+		assert_eq!((code, capture.err()), (0, String::new()));
+		assert_eq!(capture.stdout(), b"cafe y\n\xc4\xe3\xba\xc3 END\nlast \xff");
+	}
+
+	#[test]
+	fn raw_bytes_survive_the_round_trip() {
+		use super::fast_io::{decode_raw, encode_raw};
+		let bytes = b"ok \xe4\xbd\xa0 \x80\xff\xc3( end";
+		let text = decode_raw(bytes);
+		assert_eq!(text.chars().filter(|c| u32::from(*c) >= 0x10_FF80).count(), 3);
+		assert_eq!(&*encode_raw(&text), bytes);
+		assert_eq!(&*encode_raw("plain 你好"), "plain 你好".as_bytes());
 	}
 }
