@@ -1141,8 +1141,11 @@ fn create(
 	let console = match job.con {
 		// A group of its own keeps the keyboard's Ctrl-C away and
 		// CTRL_BREAK targetable.
-		JobConsole::Shared if own_group => CREATE_NEW_PROCESS_GROUP,
-		JobConsole::Shared => 0,
+		// No window where the host has no console to share.
+		JobConsole::Shared if own_group => {
+			CREATE_NEW_PROCESS_GROUP | pi_builtins::console_creation_flags()
+		},
+		JobConsole::Shared => pi_builtins::console_creation_flags(),
 		// Ctrl-C reaches every process of the pseudoconsole.
 		JobConsole::Private(_) => 0,
 		JobConsole::Own => CREATE_NO_WINDOW,

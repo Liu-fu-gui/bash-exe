@@ -19,6 +19,8 @@ mod fsmeta;
 mod host;
 #[cfg(unix)]
 pub use host::read_process_umask;
+#[cfg(windows)]
+pub use host::console_creation_flags;
 mod openfile;
 mod stdio;
 /// The shell's locale categories, shared by the locale-aware utilities.

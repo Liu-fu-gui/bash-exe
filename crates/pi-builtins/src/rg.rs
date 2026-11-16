@@ -1383,7 +1383,8 @@ struct Decompressor {
 
 impl Decompressor {
 	/// Spawns `command` with piped output and, when `piped_stdin`, a piped stdin to feed.
-	fn spawn(command: std::process::Command, piped_stdin: bool) -> io::Result<Self> {
+	fn spawn(mut command: std::process::Command, piped_stdin: bool) -> io::Result<Self> {
+		crate::host::no_console_window(&mut command);
 		let mut command = tokio::process::Command::from(command);
 		command
 			.stdin(if piped_stdin { Stdio::piped() } else { Stdio::null() })
