@@ -28,7 +28,12 @@ working around that.
   `rsync` and more (80-odd in all).
 - **Paths**: `C:\work\app`, `C:/work/app`, `/c/work/app` and
   `/mnt/c/work/app` all name the same folder, and `/tmp` is the temporary
-  folder. Windows programs get them as Git Bash passes them: `git -C /c/repo`
+  folder. The shell prints them as `C:/work/app` (`pwd`, `$PWD`, `$HOME`,
+  `realpath`, `command -v`), a spelling both bash and Windows programs read,
+  so `"$PWD/x"` can be handed to either; `cygpath` (`-u`, `-w`, `-m`, `-p`,
+  `-a`) converts. `PATH` takes `;` and `:` between entries
+  (`PATH="$PATH:/c/tools"`), and Windows programs get it `;` separated.
+  Windows programs get arguments as Git Bash passes them: `git -C /c/repo`
   sees `C:/repo`, `cmd //c dir` sees `/c` (`MSYS_NO_PATHCONV` and
   `MSYS2_ARG_CONV_EXCL` work as there).
 - **Windows programs stay reachable**: a command line written for the Windows
@@ -38,16 +43,16 @@ working around that.
 - **UTF-8 output**: `cmd`, PowerShell and other console programs write UTF-8
   whatever the system's code page (no GBK on a Chinese Windows), and Python
   runs with `PYTHONUTF8=1`.
-- **No surprises from Windows' own shims**: `bash x.sh` and `sh -c …` run
-  this bash, not WSL's; `$SHELL` and `$BASH` are this bash; where `python3` is
-  only the Microsoft Store's placeholder, it runs the Python that is
-  installed.
+- **No surprises from Windows' own shims**: `bash x.sh`, `sh -c …` and `exec
+  bash` run this bash, not WSL's (`exec env …` the built-in `env`); `$SHELL`
+  and `$BASH` are this bash; where `python3` is only the Microsoft Store's
+  placeholder, it runs the Python that is installed.
 - **What scripts written for Git Bash expect**: `uname -s` is
   `MINGW64_NT-…` and `$OSTYPE` `msys`; `diff <(a) <(b)`, `/dev/stdin`,
   `/dev/stderr`, `/dev/zero` and `/dev/urandom` work; a `#!/usr/bin/env node`
   script runs with node, and `/usr/bin/env`, `/bin/bash` and the like work as
   commands; `env` and `xargs` find `node.exe` and `npm.cmd` (`env -i` too);
-  `pwd -W` prints `C:/…`; `rev` is there;
+  `pwd -W` prints `C:/…`; `$PPID` is the parent's pid; `rev` is there;
   `sed` edits files that are not UTF-8 (GBK) without touching their other
   bytes; `chmod` sets and clears the read-only attribute.
 

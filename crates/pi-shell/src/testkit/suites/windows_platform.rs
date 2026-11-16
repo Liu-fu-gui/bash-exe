@@ -5,7 +5,7 @@ use bstr::BString;
 
 use crate::{
 	bash::{EngineConfig, ModeId, Platform, Script, ShellInit},
-	testkit::{FakeHost, Fault, Rig},
+	testkit::{FakeHost, Fault, MemFs, Rig},
 };
 
 /// Run `src` as zsh on a Windows engine with `env`; stdout and stderr.
@@ -58,23 +58,52 @@ fn ostype_is_msys() {
 }
 
 /// `PWD` and `HOME` start in the `/` spelling `cd` keeps, so `~`, `%~`
-/// and `:t` agree with them from the first prompt.
+/// and `:t` agree with them from the first prompt, and `"$PWD/x"` stays
+/// one spelling that Windows programs read too.
 #[test]
 fn pwd_and_home_start_with_slashes() {
+	let start = |mode, src: &str| {
+		let init = ShellInit {
+			mode,
+			argv0: if mode == ModeId::Zsh { "zsh" } else { "bash" }.into(),
+			env: vec![(BString::from("HOME"), BString::from(r"C:\Users\b"))],
+			cwd: BString::from(r"\\?\C:\Users\b\src"),
+			..ShellInit::default()
+		};
+		let cfg = EngineConfig { platform: Platform::Windows, ..EngineConfig::default() };
+		let mut rig = Rig::with_config(FakeHost::new(), init, cfg);
+		rig.run(Script::command(src.as_bytes().to_vec()), Fault::None);
+		String::from_utf8_lossy(&rig.host.stdout.bytes()).into_owned()
+	};
+	assert_eq!(
+		start(ModeId::Zsh, "print -r -- $PWD $HOME ${PWD:t} ${(D)PWD}"),
+		"C:/Users/b/src C:/Users/b src ~/src\n"
+	);
+	assert_eq!(
+		start(ModeId::Bash, "echo $PWD $HOME ~ \"$PWD/x\" ${PWD##*/}; pwd"),
+		"C:/Users/b/src C:/Users/b C:/Users/b C:/Users/b/src/x src\nC:/Users/b/src\n"
+	);
+}
+
+/// A Windows `PATH` takes an entry added the POSIX way
+/// (`PATH="$PATH:/dir"`), as Git Bash's does.
+#[test]
+fn path_takes_colon_appended_entries() {
+	let fs = MemFs::new();
+	fs.add_file("/tools/hello", b"#!/bin/sh\n", 0o755);
 	let init = ShellInit {
-		mode: ModeId::Zsh,
-		argv0: "zsh".into(),
-		env: vec![(BString::from("HOME"), BString::from(r"C:\Users\b"))],
-		cwd: BString::from(r"C:\Users\b\src"),
+		mode: ModeId::Bash,
+		argv0: "bash".into(),
+		env: vec![(BString::from("PATH"), BString::from(r"C:\Windows;C:\bin"))],
 		..ShellInit::default()
 	};
 	let cfg = EngineConfig { platform: Platform::Windows, ..EngineConfig::default() };
-	let mut rig = Rig::with_config(FakeHost::new(), init, cfg);
-	rig.run(Script::command(b"print -r -- $PWD $HOME ${PWD:t} ${(D)PWD}".to_vec()), Fault::None);
-	assert_eq!(
-		String::from_utf8_lossy(&rig.host.stdout.bytes()),
-		"C:/Users/b/src C:/Users/b src ~/src\n"
+	let mut rig = Rig::with_config(FakeHost::new().with_fs(fs), init, cfg);
+	rig.run(
+		Script::command(b"PATH=\"$PATH:/tools\"; command -v hello; type -t hello".to_vec()),
+		Fault::None,
 	);
+	assert_eq!(String::from_utf8_lossy(&rig.host.stdout.bytes()), "/tools/hello\nfile\n");
 }
 
 /// Windows always exports `USERNAME`; reading it in zsh printed a lossy
@@ -159,4 +188,18 @@ fn pwd_w_prints_the_windows_spelling() {
 		assert_eq!(String::from_utf8_lossy(&rig.host.stdout.bytes()), want);
 	}
 	assert_eq!(run_on(ModeId::Bash, Platform::Linux, "pwd -W || echo no"), "no\n");
+}
+
+/// `exec bash` and `exec env …` find this shell and the built-in tools, as
+/// Git Bash's `exec` finds its `/usr/bin`, not `PATH`'s `bash` (WSL's); the
+/// shell still ends with the command.
+#[test]
+fn exec_finds_this_shell_on_windows() {
+	assert_eq!(
+		run_on(ModeId::Bash, Platform::Windows, "(exec bash -c 'echo in $0'; echo after); echo $?"),
+		"in bash\n0\n"
+	);
+	assert_eq!(run_on(ModeId::Bash, Platform::Windows, "(exec sh -c 'exit 3'); echo $?"), "3\n");
+	// Elsewhere `exec` takes `PATH`'s programs only, as bash's does.
+	assert_eq!(run_on(ModeId::Bash, Platform::Linux, "(exec bash -c 'echo in'); echo $?"), "127\n");
 }

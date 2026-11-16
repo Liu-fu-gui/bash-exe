@@ -59,6 +59,53 @@ pub fn msys_drive(path: &[u8]) -> Option<(u8, &[u8])> {
 	Some((letter.to_ascii_uppercase(), &tail[start..]))
 }
 
+/// The entries of a `PATH`-style list. Off Windows it splits on `:`. On
+/// Windows it splits on `;`, and on any `:` that is not a drive's (`C:`) or
+/// a URL root's (`skill://`), so `PATH="$PATH:/c/tools"` adds an entry as
+/// it does in a POSIX shell. An empty entry stays (bash reads it as the
+/// working directory).
+pub fn path_list(list: &[u8], windows: bool) -> Vec<&[u8]> {
+	if !windows {
+		return list.split(|&b| b == b':').collect();
+	}
+	let mut out = Vec::new();
+	for piece in list.split(|&b| b == b';') {
+		let mut start = 0;
+		for (i, &b) in piece.iter().enumerate() {
+			if b != b':' {
+				continue;
+			}
+			let head = &piece[start..i];
+			let drive = head.len() == 1 && head[0].is_ascii_alphabetic();
+			let url = head.len() >= 2
+				&& head[0].is_ascii_alphabetic()
+				&& head
+					.iter()
+					.all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+				&& piece[i..].starts_with(b"://");
+			if !(drive || url) {
+				out.push(head);
+				start = i + 1;
+			}
+		}
+		out.push(&piece[start..]);
+	}
+	out
+}
+
+/// A `PATH` entry as a Windows program reads it: an MSYS drive alias
+/// (`/c/x`) is the drive path (`C:/x`), anything else is left as it is.
+pub fn windows_path_entry(entry: &[u8]) -> Cow<'_, [u8]> {
+	match msys_drive(entry) {
+		Some((letter, tail)) => {
+			let mut out = vec![letter, b':', b'/'];
+			out.extend_from_slice(tail);
+			Cow::Owned(out)
+		},
+		None => Cow::Borrowed(entry),
+	}
+}
+
 /// Borrows `path[start..end]` as a path.
 ///
 /// Callers only split at ASCII `/` boundaries or at a URL root, both of which

@@ -63,12 +63,13 @@ fn locate(host: &Host, search_path: &str, name: &str, all: bool) -> Vec<PathBuf>
 		return runnable(host.fs(), &host.resolve(name)).into_iter().collect();
 	}
 	let mut found = Vec::new();
-	for entry in std::env::split_paths(search_path) {
+	for entry in pi_vfs::path_list(search_path.as_bytes(), cfg!(windows)) {
+		let entry = String::from_utf8_lossy(entry);
 		// Quoted entries are common in Windows `PATH`s.
 		let entry = if cfg!(windows) {
-			PathBuf::from(entry.to_string_lossy().trim_matches('"'))
+			PathBuf::from(entry.trim_matches('"'))
 		} else {
-			entry
+			PathBuf::from(&*entry)
 		};
 		let candidate = pi_vfs::join_path(&host.resolve(entry), Path::new(name));
 		let Some(path) = runnable(host.fs(), &candidate) else {

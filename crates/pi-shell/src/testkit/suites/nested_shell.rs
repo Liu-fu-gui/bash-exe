@@ -184,3 +184,30 @@ fn a_script_without_shebang_starts_from_the_command_environment() {
 		 found\n/work/plain: line 2: nosuch: command not found\n"
 	);
 }
+
+/// `$_` is the previous simple command's last word, and a new shell's
+/// path before its first command: never unset, so a `set -u` script reads
+/// it (bats' `trap '… "$_"' DEBUG`). bash 5.3.20 output.
+#[test]
+fn underscore_is_never_unset() {
+	let (out, err, _) = run(
+		"echo a b >/dev/null; echo \"[$_]\"; set -u; echo \"[$_]\"; bash -uc 'echo \"[$_]\"'; bash \
+		 -uc 'trap \"echo t:\\$_\" DEBUG; :'",
+	);
+	assert_eq!(err, "");
+	assert_eq!(out, "[b]\n[-u]\n[bash]\nt:DEBUG\n");
+}
+
+/// A trap's action does not run the trap again, not even in a subshell or
+/// `$( )` it starts: with `set -T` (bats) the trap's function inherits
+/// the DEBUG trap, and a substitution there recursed without end. bash
+/// 5.3.20 output.
+#[test]
+fn a_trap_does_not_run_in_its_own_subshells() {
+	let (out, err, _) = run(
+		"set -T; n=0; f() { n=$((n+1)); x=$(echo \"in $BASH_SUBSHELL\" >&2; :); (echo sub >&2); }; \
+		 trap 'f' DEBUG; echo hi; echo n=$n",
+	);
+	assert_eq!(out, "hi\nn=2\n");
+	assert_eq!(err, "in 1\nsub\nin 1\nsub\n");
+}

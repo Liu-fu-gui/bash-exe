@@ -187,8 +187,8 @@ pub fn zsh_source(ctx: &mut Ctx<'_, '_>, args: &[BString]) -> R {
 		}
 	} else if path.is_none() {
 		let search = ctx.scalar(b"PATH")?.unwrap_or_default();
-		let separator = crate::bash::vm::probe::path_separator(ctx.k.engine.config().platform);
-		for dir in search.split(|&c| c == separator) {
+		let windows = ctx.k.engine.config().platform == crate::bash::ids::Platform::Windows;
+		for dir in pi_vfs::path_list(&search, windows) {
 			let cand = if dir.is_empty() || dir == b"." {
 				absolute(&cwd, file)
 			} else {

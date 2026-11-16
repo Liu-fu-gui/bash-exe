@@ -256,6 +256,8 @@ default = ["utils"]
 "util.realpath" = []
 # Shares the record layout and line-length bound with `grep`.
 "util.rev" = []
+# Windows only: its presence tells scripts they run on Windows.
+"util.cygpath" = []
 "util.rg" = ["util.grep"]
 "util.rm" = []
 "util.rmdir" = []
@@ -349,6 +351,7 @@ utils = [
   "util.readlink",
   "util.realpath",
   "util.rev",
+  "util.cygpath",
   "util.rg",
   "util.rm",
   "util.rmdir",

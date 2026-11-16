@@ -1498,7 +1498,14 @@ pub fn startup_values(
 				std::env::consts::OS
 			}),
 		),
-		(b"HOME", user.home),
+		(
+			b"HOME",
+			if platform == crate::bash::ids::Platform::Windows && !user.home.is_empty() {
+				crate::bash::fs::windows_slash_path(&user.home, &user.home)
+			} else {
+				user.home
+			},
+		),
 		(b"SHELL", shell),
 		(b"TERM", BString::from("dumb")),
 		// bash's `DEFAULT_PATH_VALUE` when the environment has no PATH.
@@ -1584,11 +1591,10 @@ impl Shell {
 			.set_misc(cx.store, MiscKey::StartNs, k.start_ns.to_string());
 		k.startup.clone_from(&init.startup);
 		let mut foreign: Vec<BString> = Vec::new();
-		// zsh on Windows keeps directories spelled with `/` (`cd` does), so
-		// `$PWD`, `$HOME` and `~` agree from the start.
-		let zsh_on_windows = init.mode.dialect() == crate::bash::ids::Dialect::Zsh
-			&& engine.config().platform == crate::bash::ids::Platform::Windows;
-		let cwd = if zsh_on_windows {
+		// On Windows directories are spelled with `/` (`cd` keeps them so),
+		// so `$PWD`, `$HOME` and `~` agree from the start.
+		let on_windows = engine.config().platform == crate::bash::ids::Platform::Windows;
+		let cwd = if on_windows {
 			builtins::zsh_dir::windows_spelling(&init.cwd, &init.cwd)
 		} else {
 			init.cwd.clone()
@@ -1600,7 +1606,7 @@ impl Shell {
 			{
 				import_function(&mut k, cx.store, func, value);
 			} else if is_ident(name) {
-				let value = if zsh_on_windows && name == "HOME" {
+				let value = if on_windows && name == "HOME" {
 					builtins::zsh_dir::windows_spelling(value, value)
 				} else {
 					value.clone()
@@ -2908,6 +2914,7 @@ impl Vproc {
 			spare: Vec::new(),
 			calls: Vec::new(),
 			own_traps: proc::OwnTraps::EMPTY,
+			outer_traps: proc::OwnTraps::EMPTY,
 			trap_frames: 0,
 			mode: ModeId::Bash,
 			zsh: None,
@@ -2986,6 +2993,7 @@ impl Vproc {
 		// does not run them (`state::inherited_trap`).
 		set_subshell_depth(&mut vp, subshell_depth(self).saturating_add(1));
 		vp.status = self.status;
+		vp.outer_traps = self.traps_running();
 		vp.scopes = state::copy_scopes(&k.root, store, self).unwrap_or_else(|err| {
 			k.fail(err);
 			Vec::new()

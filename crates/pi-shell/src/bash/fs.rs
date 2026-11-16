@@ -107,6 +107,32 @@ pub fn plain_windows_path(path: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 	}
 }
 
+/// `path` in the engine's Windows spelling, the one `$PWD`, `$HOME`, `pwd`
+/// and `realpath` show: `/` separators (Windows takes either, a Windows
+/// program reads `C:/x` in any argument, and `"$PWD/x"` stays one
+/// spelling), the `\\?\` prefix of a resolved path dropped
+/// ([`plain_windows_path`]; a path that keeps it is left as is, `\` being
+/// its only separator), and a root-relative `/x` or `\x` on the drive of
+/// `cwd`.
+pub fn windows_slash_path(path: &[u8], cwd: &[u8]) -> BString {
+	let path = plain_windows_path(path);
+	if path.starts_with(br"\\?\") {
+		return BString::from(path.into_owned());
+	}
+	let mut out: Vec<u8> = path
+		.iter()
+		.map(|&c| if c == b'\\' { b'/' } else { c })
+		.collect();
+	if out.first() == Some(&b'/')
+		&& out.get(1) != Some(&b'/')
+		&& let [drive, b':', b'/' | b'\\', ..] = cwd
+		&& drive.is_ascii_alphabetic()
+	{
+		out.splice(0..0, cwd[..2].iter().copied());
+	}
+	out.into()
+}
+
 /// Result of starting a filesystem operation.
 pub enum FsPoll<T> {
 	/// The answer is available now.

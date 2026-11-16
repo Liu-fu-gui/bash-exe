@@ -812,9 +812,20 @@ fn command(path: &BStr, argv: &[BString]) -> io::Result<(Vec<u16>, Vec<u16>)> {
 /// command's environment has none, as Cygwin does, so `env -i node` runs.
 const FORCED_VARS: [&str; 3] = ["SYSTEMDRIVE", "SYSTEMROOT", "WINDIR"];
 
+/// `PATH` as Windows programs read it: `;` separated, with the entries a
+/// script added the POSIX way (`PATH="$PATH:/c/tools"`) split out and MSYS
+/// drive aliases spelled as drives ([`pi_vfs::path_list`]).
+fn windows_path(path: &str) -> String {
+	let entries: Vec<String> = pi_vfs::path_list(path.as_bytes(), true)
+		.into_iter()
+		.map(|entry| String::from_utf8_lossy(&pi_vfs::windows_path_entry(entry)).into_owned())
+		.collect();
+	entries.join(";")
+}
+
 /// `CREATE_UNICODE_ENVIRONMENT` block: `K=V\0…\0`, sorted by name without
 /// case as Windows requires (case-insensitive duplicates: the last wins),
-/// with [`FORCED_VARS`].
+/// with [`FORCED_VARS`] and `PATH` in its Windows form ([`windows_path`]).
 fn env_block(env: &EnvView) -> io::Result<Vec<u16>> {
 	let mut vars: Vec<(String, String, String)> = Vec::with_capacity(env.len() + FORCED_VARS.len());
 	for (k, v) in env.iter() {
@@ -824,7 +835,13 @@ fn env_block(env: &EnvView) -> io::Result<Vec<u16>> {
 		if k.contains('\0') || v.contains('\0') || k.get(1..).is_some_and(|r| r.contains('=')) {
 			return Err(invalid("environment entry contains NUL or `=` in its name"));
 		}
-		vars.push((k.to_uppercase(), k.to_owned(), v.to_owned()));
+		let upper = k.to_uppercase();
+		let v = if upper == "PATH" {
+			windows_path(v)
+		} else {
+			v.to_owned()
+		};
+		vars.push((upper, k.to_owned(), v));
 	}
 	for name in FORCED_VARS {
 		if vars.iter().any(|(upper, ..)| upper == name) {

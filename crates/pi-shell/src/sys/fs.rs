@@ -1266,10 +1266,10 @@ impl Fs for StdFs {
 
 	fn realpath(&mut self, path: &BStr) -> FsPoll<BString> {
 		FsPoll::Ready(host_path(path).and_then(fs::canonicalize).map(|p| {
-			// `C:\x`, not `\\?\C:\x`, where both name the file.
+			// `C:/x`, not `\\?\C:\x`, where both name the file.
 			let p = engine_path(&p);
 			if cfg!(windows) {
-				BString::from(crate::bash::fs::plain_windows_path(&p).into_owned())
+				crate::bash::fs::windows_slash_path(&p, b"")
 			} else {
 				p
 			}

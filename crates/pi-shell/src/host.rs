@@ -721,8 +721,16 @@ impl crate::bash::Host for PiHost {
 			// SAFETY: getppid has no preconditions.
 			u32::try_from(unsafe { libc::getppid() }).unwrap_or(0)
 		}
+		// Windows has no `getppid`: the parent recorded when this process
+		// was created (scripts such as modernish refuse a `$PPID` of 0).
 		#[cfg(not(unix))]
-		0
+		{
+			let pid = i32::try_from(std::process::id()).unwrap_or(0);
+			crate::proctree::Process::from_pid(pid)
+				.and_then(|p| p.ppid())
+				.and_then(|p| u32::try_from(p).ok())
+				.unwrap_or(0)
+		}
 	}
 
 	fn user(&self) -> UserInfo {
