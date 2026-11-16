@@ -27,11 +27,20 @@ working around that.
   `timeout`, `nohup`, `sleep`, `ps`, `pgrep`, `pkill`, `sponge`, `ts`, `sd`,
   `rsync` and more (80-odd in all).
 - **Paths**: `C:\work\app`, `C:/work/app`, `/c/work/app` and
-  `/mnt/c/work/app` all name the same folder.
+  `/mnt/c/work/app` all name the same folder, and `/tmp` is the temporary
+  folder. Windows programs get them as Git Bash passes them: `git -C /c/repo`
+  sees `C:/repo`, `cmd //c dir` sees `/c` (`MSYS_NO_PATHCONV` and
+  `MSYS2_ARG_CONV_EXCL` work as there).
 - **Windows programs stay reachable**: a command line written for the Windows
   program a built-in shadows (`find /c "x" file`, `sort /r`) goes to that
   program; everything else on `PATH` (`git`, `node`, `python`, …) runs as
   usual.
+- **UTF-8 output**: `cmd`, PowerShell and other console programs write UTF-8
+  whatever the system's code page (no GBK on a Chinese Windows), and Python
+  runs with `PYTHONUTF8=1`.
+- **No surprises from Windows' own shims**: `bash x.sh` and `sh -c …` run
+  this bash, not WSL's; `$SHELL` is this bash; where `python3` is only the
+  Microsoft Store's placeholder, it runs the Python that is installed.
 
 ## Use
 

@@ -66,7 +66,7 @@ use windows_sys::Win32::{
 	System::{
 		Console::{
 			COORD, CTRL_BREAK_EVENT, ClosePseudoConsole, CreatePseudoConsole,
-			GenerateConsoleCtrlEvent, HPCON,
+			GenerateConsoleCtrlEvent, HPCON, SetConsoleCP, SetConsoleOutputCP,
 		},
 		IO::{CreateIoCompletionPort, GetQueuedCompletionStatus, PostQueuedCompletionStatus},
 		JobObjects::{
@@ -85,7 +85,7 @@ use windows_sys::Win32::{
 			PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 			PROCESS_SUSPEND_RESUME, QueryFullProcessImageNameW, ResumeThread, STARTF_USESTDHANDLES,
 			STARTUPINFOEXW, STARTUPINFOW, SetEvent, TerminateProcess, UpdateProcThreadAttribute,
-			WaitForMultipleObjects,
+			WaitForMultipleObjects, WaitForSingleObject,
 		},
 	},
 };
@@ -97,6 +97,7 @@ use crate::{
 		cmdline,
 		job::{self, JobOps, JobPause},
 		lifecycle::{Abandon, Tracker},
+		msys_args,
 		pump::{End, Feed, Pump, Pumps, os},
 	},
 };
@@ -531,7 +532,102 @@ impl Console {
 		if hr < 0 {
 			return Err(io::Error::from_raw_os_error(hr));
 		}
+		give_code_page(hpc);
 		Ok(Self { hpc, input })
+	}
+}
+
+/// The argument that has a program given to [`use_console_code_page`] set
+/// its console's code page ([`set_console_code_page_if_asked`]).
+pub const SET_CONSOLE_CODE_PAGE: &str = "--pi-set-console-code-page";
+
+/// The code page pseudoconsoles get, and the program that sets it on each;
+/// none: the system's OEM code page, which a console starts with.
+static CONSOLE_CODE_PAGE: Mutex<Option<(String, u32)>> = Mutex::new(None);
+
+/// Gives every pseudoconsole opened from now on `code_page`, for input and
+/// output, before anything runs on it.
+///
+/// A console program writes its output in its console's code page, the
+/// system's OEM one otherwise (CP936 on Simplified Chinese), which readers
+/// of UTF-8 cannot read. No call sets another console's code page: `program`,
+/// run on the new console as `program --pi-set-console-code-page CODE_PAGE`,
+/// sets it ([`set_console_code_page_if_asked`] first thing in its `main`).
+pub fn use_console_code_page(program: &std::path::Path, code_page: u32) {
+	if let Some(program) = program.to_str() {
+		*CONSOLE_CODE_PAGE.lock() = Some((program.to_owned(), code_page));
+	}
+}
+
+/// In a program given to [`use_console_code_page`], started with `args`:
+/// whether it was started to set its console's code page, which it then
+/// has done.
+pub fn set_console_code_page_if_asked(args: &[std::ffi::OsString]) -> bool {
+	let [_, flag, page] = args else { return false };
+	if flag != SET_CONSOLE_CODE_PAGE {
+		return false;
+	}
+	if let Some(page) = page.to_str().and_then(|page| page.parse::<u32>().ok()) {
+		// SAFETY: plain calls with a scalar argument.
+		unsafe {
+			SetConsoleOutputCP(page);
+			SetConsoleCP(page);
+		}
+	}
+	true
+}
+
+/// Runs the program of [`use_console_code_page`] on `hpc`, waiting up to
+/// 2 s for it. Any failure leaves the console as it is.
+fn give_code_page(hpc: HPCON) {
+	let Some((program, page)) = CONSOLE_CODE_PAGE.lock().clone() else {
+		return;
+	};
+	// SAFETY: no preconditions. A console starts with the OEM code page.
+	if unsafe { windows_sys::Win32::Globalization::GetOEMCP() } == page {
+		return;
+	}
+	let page = page.to_string();
+	let Ok(mut line) = cmdline::command_line(&[program.as_str(), SET_CONSOLE_CODE_PAGE, &page])
+	else {
+		return;
+	};
+	line.push(0);
+	let app: Vec<u16> = program.encode_utf16().chain([0]).collect();
+	let Ok(mut attrs) = Attributes::new(&[], Some(hpc)) else {
+		return;
+	};
+	let mut si = STARTUPINFOEXW::default();
+	si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+	si.lpAttributeList = attrs.list();
+	let mut pi = PROCESS_INFORMATION::default();
+	// SAFETY: NUL-terminated wide strings, a writable command line, and the
+	// startup info with its attribute list alive until return.
+	let created = unsafe {
+		CreateProcessW(
+			app.as_ptr(),
+			line.as_mut_ptr(),
+			ptr::null(),
+			ptr::null(),
+			0,
+			EXTENDED_STARTUPINFO_PRESENT,
+			ptr::null(),
+			ptr::null(),
+			(&raw const si).cast::<STARTUPINFOW>(),
+			&raw mut pi,
+		)
+	};
+	drop(attrs);
+	if created == 0 {
+		return;
+	}
+	let (Ok(process), Ok(_thread)) = (owned(pi.hProcess), owned(pi.hThread)) else {
+		return;
+	};
+	// SAFETY: an open process handle.
+	if unsafe { WaitForSingleObject(raw(&process), 2000) } == WAIT_TIMEOUT {
+		// SAFETY: as above.
+		unsafe { TerminateProcess(raw(&process), 1) };
 	}
 }
 
@@ -670,6 +766,26 @@ fn is_system_find(path: &BStr) -> bool {
 	path.encode_utf16().map(fold).eq(expected.iter().copied())
 }
 
+/// `argv` as Git Bash would pass it ([`msys_args`]): its arguments' POSIX
+/// paths in Windows spelling, `//x` as `/x`. Not for System32's `find`, whose
+/// command line is written in its own syntax ([`crate::cmd_dialect`]).
+fn msys_argv(path: &BStr, mut argv: Vec<BString>, env: &EnvView) -> Vec<BString> {
+	if argv.len() < 2 || is_system_find(path) {
+		return argv;
+	}
+	let var = |name: &[u8]| env.get(name).and_then(|value| value.to_str().ok());
+	let exclusions =
+		msys_args::Exclusions::new(var(b"MSYS_NO_PATHCONV"), var(b"MSYS2_ARG_CONV_EXCL"));
+	for arg in &mut argv[1..] {
+		let Ok(text) = arg.to_str() else { continue };
+		let converted = msys_args::convert(text, &msys_args::System, &exclusions);
+		if converted != text {
+			*arg = BString::from(converted.into_owned());
+		}
+	}
+	argv
+}
+
 /// Application name and mutable command line (both NUL-terminated).
 fn command(path: &BStr, argv: &[BString]) -> io::Result<(Vec<u16>, Vec<u16>)> {
 	let mut line = if cmdline::is_batch(path) {
@@ -757,7 +873,7 @@ struct Attributes {
 
 impl Attributes {
 	fn new(handles: &[HANDLE], pty: Option<HPCON>) -> io::Result<Self> {
-		let count = 1 + u32::from(pty.is_some());
+		let count = u32::from(!handles.is_empty()) + u32::from(pty.is_some());
 		let mut size = 0usize;
 		// SAFETY: a null list with a size pointer is the documented size query
 		// (it "fails" with ERROR_INSUFFICIENT_BUFFER).
@@ -769,18 +885,22 @@ impl Attributes {
 		})?;
 		// Initialized: from here on, drop deletes it.
 		let mut a = Self { buf };
-		// SAFETY: the list is initialized; `handles` outlives CreateProcessW
-		// (the caller keeps it alive across the call).
-		let mut ok = unsafe {
-			UpdateProcThreadAttribute(
-				a.list(),
-				0,
-				PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-				handles.as_ptr().cast(),
-				mem::size_of_val(handles),
-				ptr::null_mut(),
-				ptr::null(),
-			)
+		let mut ok = if handles.is_empty() {
+			1
+		} else {
+			// SAFETY: the list is initialized; `handles` outlives
+			// CreateProcessW (the caller keeps it alive across the call).
+			unsafe {
+				UpdateProcThreadAttribute(
+					a.list(),
+					0,
+					PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+					handles.as_ptr().cast(),
+					mem::size_of_val(handles),
+					ptr::null_mut(),
+					ptr::null(),
+				)
+			}
 		};
 		if ok != 0
 			&& let Some(hpc) = pty
@@ -918,6 +1038,7 @@ pub(super) fn spawn(shared: &Arc<Shared>, spec: SpawnSpec<'_>) -> io::Result<Box
 		sigmask_ign.contains(Signal::Int) || matches!(pgroup, PgroupSpec::Job { terminal: None, .. });
 	let mut pumps = Vec::new();
 	let argv = bridge_fds(argv, extra_fds, &mut pumps)?;
+	let argv = msys_argv(path, argv, env);
 	let (app, mut line) = command(path, &argv)?;
 	let env = env_block(env)?;
 	let cwd = wide(cwd)?;

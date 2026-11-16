@@ -532,7 +532,8 @@ impl PiHost {
 impl crate::bash::Host for PiHost {
 	/// pi's order ([`crate::extras`]): the engine's intrinsics (`suspend`
 	/// withheld), the tools (`timeout`, `nohup`, `git`, the extras that run
-	/// command lines), the other extras, then `PATH`. A name with a slash is
+	/// command lines), on Windows `bash`/`sh`/`zsh` in-engine, the other
+	/// extras, then `PATH`. A name with a slash is
 	/// only ever a path; `exec` searches `PATH` without asking.
 	fn resolve(&mut self, name: &BStr, mode: ModeId, why: ResolveCtx) -> Resolved {
 		if why.has_slash {
@@ -547,6 +548,12 @@ impl crate::bash::Host for PiHost {
 		}
 		if let Some(tool) = self.tools.lookup(name) {
 			return Resolved::Tool(tool);
+		}
+		// On Windows `PATH`'s `bash` is WSL's (System32, WindowsApps) and
+		// `sh` Git's or none: `bash script.sh` runs in-engine, as a script
+		// with a `#!/bin/bash` line does.
+		if cfg!(windows) && matches!(name.as_bytes(), b"bash" | b"sh" | b"zsh") {
+			return Resolved::SelfShell;
 		}
 		self
 			.tools

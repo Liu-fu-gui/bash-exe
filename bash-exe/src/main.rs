@@ -7,9 +7,10 @@
 //! GNU-style utilities built in (`rg`, `grep`, `sed`, `awk`, `find`, `xargs`,
 //! `jq`, `tar`, …) ahead of `PATH`; a command line written for the Windows
 //! program one of them shadows (`find /c "x"`, `sort /r`) going to that
-//! program; `/c/…` and `C:\…` alike. Its fds 0, 1 and 2 are the process's
-//! own. `-e`, `-u`, `-x` and `-l` may come with `-c`; the last does nothing,
-//! there being no profile to read.
+//! program; `/c/…` and `C:\…` alike; Windows programs given paths as Git
+//! Bash gives them and writing UTF-8 ([`prepare_windows`]). Its fds 0, 1 and
+//! 2 are the process's own. `-e`, `-u`, `-x` and `-l` may come with `-c`;
+//! the last does nothing, there being no profile to read.
 //!
 //! Anything else (a script, commands on stdin, an interactive shell,
 //! `--version`) is the engine as a process shell, the utilities standing in
@@ -27,6 +28,13 @@ use pi_shell::{
 
 fn main() -> ExitCode {
 	let args: Vec<OsString> = env::args_os().collect();
+	#[cfg(windows)]
+	{
+		if pi_shell::sys::set_console_code_page_if_asked(&args) {
+			return ExitCode::SUCCESS;
+		}
+		prepare_windows();
+	}
 	let status = match CommandLine::parse(args.get(1..).unwrap_or_default()) {
 		Some(line) => run(&line),
 		None => process::main(
@@ -42,6 +50,31 @@ fn main() -> ExitCode {
 		println!("BaoCode Bash {} <{}>", env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_REPOSITORY"));
 	}
 	ExitCode::from((status & 0xff) as u8)
+}
+
+/// What the programs an agent's commands start on Windows should do, set
+/// before anything else runs:
+///
+/// - Console programs (`cmd`, PowerShell, .NET) write UTF-8: each runs on a
+///   console of its own, which starts with the system's OEM code page (GBK on
+///   Simplified Chinese), and is given UTF-8 first (by this program, run on it
+///   as `bash.exe --pi-set-console-code-page 65001`).
+/// - Python reads and writes UTF-8 (`PYTHONUTF8=1`), not the ANSI code page,
+///   unless `PYTHONUTF8` or `PYTHONIOENCODING` says otherwise.
+/// - `SHELL` is this bash, unless set: what `"$SHELL" -c …` runs.
+#[cfg(windows)]
+fn prepare_windows() {
+	let Ok(exe) = env::current_exe() else { return };
+	pi_shell::sys::use_console_code_page(&exe, 65001);
+	// SAFETY: no other thread runs yet.
+	unsafe {
+		if env::var_os("PYTHONUTF8").is_none() && env::var_os("PYTHONIOENCODING").is_none() {
+			env::set_var("PYTHONUTF8", "1");
+		}
+		if env::var_os("SHELL").is_none() {
+			env::set_var("SHELL", exe.to_string_lossy().replace('\\', "/"));
+		}
+	}
 }
 
 /// `bash [-c] [-e] [-u] [-x] [-l] [--login|--norc|--noprofile] [--] COMMAND
@@ -138,6 +171,202 @@ fn quote(text: &str) -> String {
 	format!("'{}'", text.replace('\'', r"'\''"))
 }
 
+/// What goes before the command, on its first line: `SHELL` exported, as
+/// the shell takes no `SHELL` from the environment (it would be the
+/// caller's shell) and has no login shell to set it from on Windows; and
+/// the [`python_stand_ins`].
+#[cfg(windows)]
+fn prelude() -> String {
+	let mut prelude = match env::var("SHELL") {
+		Ok(shell) if !shell.is_empty() => format!("export SHELL={}; ", quote(&shell)),
+		_ => String::new(),
+	};
+	prelude.push_str(&python_stand_ins());
+	prelude
+}
+
+#[cfg(not(windows))]
+const fn prelude() -> String {
+	String::new()
+}
+
+/// Functions for `python3` and `python` where `PATH` finds only the App
+/// Installer's alias of that name, which runs no Python but says to get
+/// one from the Microsoft Store (status 9009): `python3` runs `python`,
+/// `python` runs `python3`, or either runs `py -3`, whichever is real.
+/// Exported, for the shells started in-engine. Agents write `python3`; a
+/// python.org install has `python` and `py`.
+#[cfg(windows)]
+fn python_stand_ins() -> String {
+	use std::path::PathBuf;
+
+	let Some(apps) =
+		env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join(r"Microsoft\WindowsApps"))
+	else {
+		return String::new();
+	};
+	// Without the aliases, nothing to stand in for (and no `PATH` search).
+	if !store_python_alias(&apps.join("python3.exe"))
+		&& !store_python_alias(&apps.join("python.exe"))
+	{
+		return String::new();
+	}
+	let extensions: Vec<String> = env::var("PATHEXT")
+		.unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned())
+		.split(';')
+		.filter(|ext| !ext.is_empty())
+		.map(str::to_ascii_lowercase)
+		.collect();
+	// What `PATH` finds for each, `dir\name.ext` for each `PATHEXT`
+	// extension in each directory in turn: one listing a directory.
+	let names = ["python3", "python", "py"];
+	let mut found: [Option<PathBuf>; 3] = Default::default();
+	for dir in env::split_paths(&env::var_os("PATH").unwrap_or_default()) {
+		if found.iter().all(Option::is_some) {
+			break;
+		}
+		if dir.as_os_str().is_empty() {
+			continue;
+		}
+		let files = files_starting_with_py(&dir);
+		for (name, found) in names.iter().zip(&mut found) {
+			if found.is_none() {
+				*found = extensions
+					.iter()
+					.map(|ext| format!("{name}{ext}"))
+					.find(|file| files.contains(file))
+					.map(|file| dir.join(file));
+			}
+		}
+	}
+	let [python3, python, py] =
+		found.map(|program| program.is_some_and(|program| !store_python_alias(&program)));
+	let mut functions = Vec::new();
+	for (name, ok, other) in
+		[("python3", python3, ("python", python)), ("python", python, ("python3", python3))]
+	{
+		if ok {
+			continue;
+		}
+		if other.1 {
+			functions.push((name, other.0.to_owned()));
+		} else if py {
+			functions.push((name, "py -3".to_owned()));
+		}
+	}
+	functions
+		.iter()
+		.map(|(name, runs)| format!("{name}() {{ {runs} \"$@\"; }}; export -f {name}; "))
+		.collect()
+}
+
+/// The names, lowercase, of the files in `dir` that start with `py`.
+#[cfg(windows)]
+fn files_starting_with_py(dir: &std::path::Path) -> Vec<String> {
+	use std::os::windows::ffi::OsStrExt as _;
+
+	use windows_sys::Win32::{
+		Foundation::INVALID_HANDLE_VALUE,
+		Storage::FileSystem::{
+			FILE_ATTRIBUTE_DIRECTORY, FindClose, FindExInfoBasic, FindExSearchNameMatch,
+			FindFirstFileExW, FindNextFileW, WIN32_FIND_DATAW,
+		},
+	};
+
+	let pattern: Vec<u16> = dir
+		.join("py*")
+		.as_os_str()
+		.encode_wide()
+		.chain(std::iter::once(0))
+		.collect();
+	// SAFETY: plain data.
+	let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+	// SAFETY: `pattern` is NUL-terminated; `data` is a WIN32_FIND_DATAW.
+	let find = unsafe {
+		FindFirstFileExW(
+			pattern.as_ptr(),
+			FindExInfoBasic,
+			(&raw mut data).cast(),
+			FindExSearchNameMatch,
+			std::ptr::null(),
+			0,
+		)
+	};
+	if find == INVALID_HANDLE_VALUE {
+		return Vec::new();
+	}
+	let mut files = Vec::new();
+	loop {
+		if data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+			let len = data
+				.cFileName
+				.iter()
+				.position(|&c| c == 0)
+				.unwrap_or(data.cFileName.len());
+			files.push(String::from_utf16_lossy(&data.cFileName[..len]).to_ascii_lowercase());
+		}
+		// SAFETY: `find` is open; `data` as above.
+		if unsafe { FindNextFileW(find, &raw mut data) } == 0 {
+			break;
+		}
+	}
+	// SAFETY: `find` is open, and closed once.
+	unsafe { FindClose(find) };
+	files
+}
+
+/// Whether `program` is an App Installer alias (`python.exe` in
+/// `WindowsApps`) that only sends to the Microsoft Store: an app execution
+/// link to its `PythonRedirector`.
+#[cfg(windows)]
+fn store_python_alias(program: &std::path::Path) -> bool {
+	use std::os::windows::{fs::OpenOptionsExt as _, io::AsRawHandle as _};
+
+	use windows_sys::Win32::{
+		Storage::FileSystem::{
+			FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+		},
+		System::{IO::DeviceIoControl, Ioctl::FSCTL_GET_REPARSE_POINT},
+	};
+	const IO_REPARSE_TAG_APPEXECLINK: u32 = 0x8000_001b;
+
+	let Ok(file) = fs::OpenOptions::new()
+		.access_mode(FILE_READ_ATTRIBUTES)
+		.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+		.open(program)
+	else {
+		return false;
+	};
+	let mut data = vec![0_u8; 16 * 1024];
+	let mut len = 0_u32;
+	// SAFETY: `data` is writable for its length; `len` receives the count.
+	let ok = unsafe {
+		DeviceIoControl(
+			file.as_raw_handle(),
+			FSCTL_GET_REPARSE_POINT,
+			std::ptr::null(),
+			0,
+			data.as_mut_ptr().cast(),
+			data.len() as u32,
+			&raw mut len,
+			std::ptr::null_mut(),
+		)
+	} != 0;
+	if !ok
+		|| len < 8
+		|| u32::from_le_bytes([data[0], data[1], data[2], data[3]]) != IO_REPARSE_TAG_APPEXECLINK
+	{
+		return false;
+	}
+	let wide: Vec<u16> = data[8..len as usize]
+		.as_chunks::<2>()
+		.0
+		.iter()
+		.map(|pair| u16::from_le_bytes(*pair))
+		.collect();
+	String::from_utf16_lossy(&wide).contains("PythonRedirector")
+}
+
 /// Runs [line] over this process's fds; its exit status, 130 when
 /// interrupted.
 fn run(line: &CommandLine) -> i32 {
@@ -160,7 +389,7 @@ fn run(line: &CommandLine) -> i32 {
 			}
 		});
 		let options = ShellExecuteOptions {
-			command: line.script(),
+			command: format!("{}{}", prelude(), line.script()),
 			cwd: env::current_dir()
 				.ok()
 				.map(|dir| dir.to_string_lossy().into_owned()),

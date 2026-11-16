@@ -826,6 +826,18 @@ mod tests {
 			b"D:/Tools/app.exe".as_slice()
 		);
 		assert_eq!(absolute_on(b"/", b"/c/x", Platform::Linux), b"/c/x".as_slice());
+		let temp = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+		let temp = temp.trim_end_matches('/');
+		assert_eq!(
+			absolute_on(br"C:\project", b"/tmp/x.log", Platform::Windows),
+			format!("{temp}/x.log").as_bytes()
+		);
+		assert_eq!(absolute_on(br"C:\project", b"/tmp", Platform::Windows), temp.as_bytes());
+		assert_eq!(
+			absolute_on(br"C:\project", b"/tmpdir/x", Platform::Windows),
+			b"/tmpdir/x".as_slice()
+		);
+		assert_eq!(absolute_on(b"/", b"/tmp/x", Platform::Linux), b"/tmp/x".as_slice());
 	}
 
 	#[test]

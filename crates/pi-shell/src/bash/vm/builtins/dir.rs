@@ -399,6 +399,11 @@ mod tests {
 		assert_eq!(logical(b"virtual://dir", br"C:\work\..\target"), br"C:\target".as_slice());
 		assert_eq!(logical(b"virtual://dir", br"\\server\share\a"), br"\\server\share\a".as_slice());
 		assert_eq!(logical(br"C:\work", b"/d/other/../target"), br"D:\target".as_slice());
+		let temp = std::env::temp_dir();
+		assert_eq!(
+			logical(b"virtual://dir", b"/tmp/x"),
+			temp.join("x").as_os_str().as_encoded_bytes()
+		);
 	}
 
 	#[test]
@@ -407,6 +412,6 @@ mod tests {
 		assert_eq!(logical(b"virtual://dir", b"sub/./x"), "virtual://dir/sub/x");
 		assert_eq!(logical(b"virtual://dir", b"../../up"), "virtual://up");
 		assert_eq!(logical(b"virtual://", b".."), "virtual://");
-		assert_eq!(logical(b"virtual://dir", b"/tmp"), "/tmp");
+		assert_eq!(logical(b"virtual://dir", b"/var"), "/var");
 	}
 }
